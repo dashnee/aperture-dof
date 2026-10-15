@@ -5,25 +5,40 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>光圈与景深 · Aperture &amp; Depth of Field</title>
 <style>
-  html,body{margin:0;background:#06080f;color:#e9edf5;font-family:-apple-system,"PingFang SC","Noto Sans SC","Microsoft YaHei",Helvetica,Arial,sans-serif}
-  h1{font-weight:400;font-size:15px;letter-spacing:.2em;text-align:center;margin:14px 0 6px;opacity:.7}
-  #wrap{position:relative;width:min(100vw,calc((100vh - 150px)*16/9));margin:0 auto;aspect-ratio:16/9;overflow:hidden}
-  canvas{width:100%;height:100%;display:block;background:#06080f}
-  #sub{position:absolute;left:0;right:0;bottom:6%;text-align:center;pointer-events:none;padding:0 6%}
-  #zh{font-size:clamp(16px,2.6vw,34px);letter-spacing:.04em;text-shadow:0 2px 8px #000;min-height:1.4em}
-  #en{font-size:clamp(12px,1.7vw,22px);opacity:.8;margin-top:.45em;text-shadow:0 2px 8px #000;min-height:1.3em}
+  html,body{margin:0;background:#04050a;color:#e9edf5;font-family:-apple-system,"PingFang SC","Noto Sans SC","Microsoft YaHei","WenQuanYi Zen Hei",Helvetica,Arial,sans-serif}
+  h1{font-weight:400;font-size:14px;letter-spacing:.22em;text-align:center;margin:12px 0 6px;opacity:.55}
+  #wrap{position:relative;width:min(100vw,calc((100vh - 150px)*16/9));margin:0 auto;aspect-ratio:16/9;overflow:hidden;background:#04050a}
+  canvas{width:100%;height:100%;display:block}
+  #hud{position:absolute;inset:0;pointer-events:none}
+  #tag{position:absolute;left:4%;top:5%;font-size:clamp(12px,1.5vw,20px);letter-spacing:.12em;color:#6fd3ff;text-shadow:0 0 10px #000;opacity:.95}
+  #tag small{display:block;color:#aab4c8;font-size:.72em;letter-spacing:.06em;margin-top:.2em}
+  #read{position:absolute;right:4%;top:5%;text-align:right;font:clamp(14px,2.2vw,30px) "SF Mono",Menlo,Consolas,monospace;color:#f2c572;text-shadow:0 0 10px #000}
+  #read small{display:block;color:#aab4c8;font-size:.55em}
+  #scrim{position:absolute;left:0;right:0;bottom:0;height:30%;background:linear-gradient(to top,rgba(2,3,8,.82),rgba(2,3,8,.45) 55%,rgba(2,3,8,0));pointer-events:none}
+  #sub{position:absolute;left:0;right:0;bottom:5%;text-align:center;padding:0 6%}
+  #zh{font-size:clamp(16px,2.6vw,34px);letter-spacing:.04em;text-shadow:0 2px 10px #000,0 0 3px #000;min-height:1.4em}
+  #en{font-size:clamp(12px,1.6vw,21px);opacity:.82;margin-top:.4em;text-shadow:0 2px 10px #000,0 0 3px #000;min-height:1.3em}
   #ctrl{display:flex;gap:12px;align-items:center;justify-content:center;padding:14px;flex-wrap:wrap}
   button{background:#1a2030;color:#e9edf5;border:1px solid #34405a;border-radius:8px;padding:8px 16px;cursor:pointer;font-size:14px}
   #bar{width:min(70vw,720px);height:6px;background:#1a2030;border-radius:3px;cursor:pointer}
   #prog{height:100%;width:0;background:linear-gradient(90deg,#f2c572,#6fd3ff);border-radius:3px}
   #time{font-variant-numeric:tabular-nums;opacity:.7;min-width:110px;text-align:center;font-size:14px}
+  #fade{position:absolute;inset:0;background:#000;opacity:0;pointer-events:none}
+  #err{position:absolute;left:10px;top:10px;color:#f66;font:12px monospace;z-index:9;white-space:pre-wrap}
 </style>
 </head>
 <body>
 <h1>光圈与景深 · APERTURE &amp; DEPTH OF FIELD</h1>
 <div id="wrap">
-  <canvas id="c" width="1280" height="720"></canvas>
-  <div id="sub"><div id="zh"></div><div id="en"></div></div>
+  <canvas id="c"></canvas>
+  <div id="hud">
+    <div id="scrim"></div>
+    <div id="tag"></div>
+    <div id="read"></div>
+    <div id="sub"><div id="zh"></div><div id="en"></div></div>
+  </div>
+  <div id="fade"></div>
+  <div id="err"></div>
 </div>
 <div id="ctrl">
   <button id="play">▶ 播放 / Play</button>
@@ -32,281 +47,541 @@
 </div>
 <audio id="bgm" src="audio.m4a" preload="auto"></audio>
 
-<script>
-const cv=document.getElementById('c'), g=cv.getContext('2d');
-const W=1280,H=720,DUR=60,TAU=Math.PI*2,XF=0.3;
-const audio=document.getElementById('bgm'), btn=document.getElementById('play');
-const bar=document.getElementById('bar'), prog=document.getElementById('prog');
-const tlabel=document.getElementById('time'), zhEl=document.getElementById('zh'), enEl=document.getElementById('en');
-const params=new URLSearchParams(location.search);
-let T=parseFloat(params.get('t')||'0'), playing=false, lastNow=null, GA=1;
+<script type="importmap">{"imports":{"three":"./lib/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+import {EffectComposer} from './lib/jsm/postprocessing/EffectComposer.js';
+import {RenderPass} from './lib/jsm/postprocessing/RenderPass.js';
+import {UnrealBloomPass} from './lib/jsm/postprocessing/UnrealBloomPass.js';
+import {OutputPass} from './lib/jsm/postprocessing/OutputPass.js';
 
-const ease=x=>{x=Math.min(1,Math.max(0,x));return x*x*(3-2*x)};
-function kf(keys,t){
+const $=id=>document.getElementById(id);
+const errEl=$('err');
+window.addEventListener('error',e=>{errEl.textContent+=(e.message||e)+'\n';});
+window.addEventListener('unhandledrejection',e=>{errEl.textContent+=String(e.reason)+'\n';});
+
+const DUR=60, TAU=Math.PI*2;
+const params=new URLSearchParams(location.search);
+const PIXEL_W=+(params.get('w')||1280), PIXEL_H=Math.round(PIXEL_W*9/16);
+let T=parseFloat(params.get('t')||'0'), playing=false, lastNow=null;
+
+const clamp=(x,a=0,b=1)=>Math.min(b,Math.max(a,x));
+const sm=x=>{x=clamp(x);return x*x*(3-2*x)};
+const sm5=x=>{x=clamp(x);return x*x*x*(x*(x*6-15)+10)};   // smootherstep: camera moves
+const lerp=(a,b,t)=>a+(b-a)*t;
+const seg=(t,a,b)=>clamp((t-a)/(b-a));
+// piecewise keyframes with smooth easing
+function kf(keys,t,e=sm){
   if(t<=keys[0][0]) return keys[0][1];
-  for(let i=1;i<keys.length;i++){
-    if(t<=keys[i][0]){const a=keys[i-1],b=keys[i];return a[1]+(b[1]-a[1])*ease((t-a[0])/(b[0]-a[0]));}
-  }
+  for(let i=1;i<keys.length;i++) if(t<=keys[i][0]){const a=keys[i-1],b=keys[i];return lerp(a[1],b[1],e((t-a[0])/(b[0]-a[0])));}
   return keys[keys.length-1][1];
 }
-// 120 BPM pulse (0.5 s period): sharp attack, quick decay, used to punch the camera on beats
-const beat=u=>Math.exp(-6*((u*2)%1));
+function kfv(keys,t,e=sm5){ // keys: [t,[x,y,z]]
+  const o=[0,0,0];for(let k=0;k<3;k++)o[k]=kf(keys.map(q=>[q[0],q[1][k]]),t,e);return o;
+}
 
-// f-number curves, local scene time (snappy, beat-length moves)
-const fB=u=>kf([[0,1.4],[0.8,16],[2.6,16],[3.2,2],[4.6,2],[5.4,11],[6.6,11],[7.2,2],[8.6,2],[9.2,16],[10.6,16],[11,1.4]],u);
-const fD=u=>kf([[0,2],[2,2],[3,16],[5,16],[6,4],[8,4],[9,11],[11,11],[12,2],[14,2]],u);
+// ================= renderer =================
+const canvas=$('c');
+const renderer=new THREE.WebGLRenderer({canvas,antialias:true,preserveDrawingBuffer:true});
+renderer.setPixelRatio(1);
+renderer.setSize(PIXEL_W,PIXEL_H,false);
+renderer.setClearColor(0x04050a,1);
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x04050a);
+scene.fog=new THREE.FogExp2(0x04050a,0.035);
+const camera=new THREE.PerspectiveCamera(46,16/9,0.05,200);
+const composer=new EffectComposer(renderer);
+composer.setSize(PIXEL_W,PIXEL_H);
+composer.addPass(new RenderPass(scene,camera));
+const BL_S=+(params.get('bs')||0.35),BL_R=+(params.get('br')||0.08),BL_T=+(params.get('bt')||0.85);
+const bloom=new UnrealBloomPass(new THREE.Vector2(PIXEL_W,PIXEL_H),BL_S,BL_R,BL_T);
+if(params.has('bloom')) composer.addPass(bloom);
+composer.addPass(new OutputPass());
 
-// ---------- drawing helpers ----------
-function bg(){g.save();g.globalAlpha=GA;g.fillStyle='#06080f';g.fillRect(-W,-H,3*W,3*H);g.restore();}
-function circ(x,y,r,col,blur=0,a=1){
-  r=Math.max(r,0.5);
-  g.save();g.globalAlpha=GA*a;
-  if(blur>0.3){
-    // feathered disc: cheap bokeh (radial gradient, no ctx.filter -> fast)
-    const R=r+blur*0.5, inner=Math.max(0,(r-blur*0.5)/R);
-    const gr=g.createRadialGradient(x,y,0,x,y,R);
-    gr.addColorStop(0,col);gr.addColorStop(Math.min(inner,0.98),col);gr.addColorStop(1,'rgba(0,0,0,0)');
-    g.fillStyle=gr;g.beginPath();g.arc(x,y,R,0,TAU);g.fill();
-  } else {
-    g.fillStyle=col;g.beginPath();g.arc(x,y,r,0,TAU);g.fill();
+// ================= palette =================
+const COL={warm:0xffc772,cool:0x6fd3ff,rose:0xff6b8b,white:0xf4f8ff,deep:0x0b1020,glass:0x9fd8ff};
+
+// ================= optics model (thin lens, scene units) =================
+// Optical axis = +X. Source on the left, lens at x=0, sensor on the right.
+const OPT={f:3.0, R:1.6};              // focal length, lens radius (semi-aperture at wide open)
+const imgDist=u=>1/(1/OPT.f-1/u);      // v for object distance u
+function apertureRadius(fnum){ return clamp(OPT.f/(2*fnum),0.12,OPT.R); }  // semi-aperture ~ f/(2N)
+
+// ================= helper builders =================
+const glowTex=(()=>{const c=document.createElement('canvas');c.width=c.height=128;const g=c.getContext('2d');
+  const gr=g.createRadialGradient(64,64,0,64,64,64);gr.addColorStop(0,'rgba(255,255,255,1)');gr.addColorStop(.25,'rgba(255,255,255,.55)');gr.addColorStop(1,'rgba(255,255,255,0)');
+  g.fillStyle=gr;g.fillRect(0,0,128,128);return new THREE.CanvasTexture(c);})();
+const discTex=(()=>{const c=document.createElement('canvas');c.width=c.height=256;const g=c.getContext('2d');
+  const gr=g.createRadialGradient(128,128,0,128,128,126);
+  gr.addColorStop(0,'rgba(255,255,255,.55)');gr.addColorStop(.72,'rgba(255,255,255,.6)');gr.addColorStop(.92,'rgba(255,255,255,.95)');gr.addColorStop(1,'rgba(255,255,255,0)');
+  g.fillStyle=gr;g.fillRect(0,0,256,256);return new THREE.CanvasTexture(c);})();
+function discSprite(color,size,opacity=1){
+  const m=new THREE.SpriteMaterial({map:discTex,color,transparent:true,opacity,depthWrite:false,blending:THREE.AdditiveBlending,fog:false});
+  const s=new THREE.Sprite(m);s.scale.setScalar(size);return s;
+}
+function glowSprite(color,size,opacity=1){
+  const m=new THREE.SpriteMaterial({map:glowTex,color,transparent:true,opacity,depthWrite:false,blending:THREE.AdditiveBlending});
+  const s=new THREE.Sprite(m);s.scale.setScalar(size);return s;
+}
+function lineMat(color,op=1){return new THREE.LineBasicMaterial({color,transparent:true,opacity:op,blending:THREE.AdditiveBlending,depthWrite:false});}
+function ptsMat(color,size,op=1){return new THREE.PointsMaterial({color,size,sizeAttenuation:true,transparent:true,opacity:op,depthWrite:false,blending:THREE.AdditiveBlending,map:glowTex});}
+
+// starfield / dust for depth cues
+const dust=(()=>{
+  const n=700,p=new Float32Array(n*3);let s=11;const r=()=>{s=(s*16807)%2147483647;return s/2147483647;};
+  for(let i=0;i<n;i++){p[i*3]=lerp(-30,30,r());p[i*3+1]=lerp(-10,10,r());p[i*3+2]=lerp(-14,14,r());}
+  const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.BufferAttribute(p,3));
+  return new THREE.Points(g,ptsMat(0x6f86b8,0.11,0.5));
+})();
+scene.add(dust);
+
+// ground grid for spatial feel (very faint)
+const grid=new THREE.GridHelper(80,80,0x1b2a4a,0x0e1730);
+grid.position.y=-3.2;grid.material.transparent=true;grid.material.opacity=0.28;scene.add(grid);
+
+// ---------- the lens (biconvex, LatheGeometry) ----------
+function makeLens(){
+  const pts=[];const R=OPT.R,th=0.55;
+  for(let i=0;i<=24;i++){const a=i/24;const r=R*a;const x=th*(1-a*a);pts.push(new THREE.Vector2(r,x));}
+  const g=new THREE.LatheGeometry(pts.map(p=>new THREE.Vector2(p.x,p.y)),64);
+  const mat=new THREE.ShaderMaterial({transparent:true,depthWrite:false,side:THREE.DoubleSide,blending:THREE.AdditiveBlending,
+    vertexShader:'varying vec3 vN;varying vec3 vV;void main(){vec4 mv=modelViewMatrix*vec4(position,1.0);vN=normalize(normalMatrix*normal);vV=normalize(-mv.xyz);gl_Position=projectionMatrix*mv;}',
+    fragmentShader:'varying vec3 vN;varying vec3 vV;void main(){float f=pow(1.0-abs(dot(normalize(vN),normalize(vV))),2.2);vec3 c=mix(vec3(0.04,0.10,0.18),vec3(0.45,0.85,1.0),f);gl_FragColor=vec4(c,0.10+0.55*f);}'});
+  const grp=new THREE.Group();
+  const m1=new THREE.Mesh(g,mat);m1.rotation.z=-Math.PI/2;grp.add(m1);
+  const g2=g.clone();const m2=new THREE.Mesh(g2,mat);m2.rotation.z=Math.PI/2;grp.add(m2);
+  const edge=new THREE.Mesh(new THREE.TorusGeometry(R,0.035,12,96),new THREE.MeshBasicMaterial({color:COL.cool,transparent:true,opacity:0.9,blending:THREE.AdditiveBlending}));
+  edge.rotation.y=Math.PI/2;grp.add(edge);
+  return grp;
+}
+const lens=makeLens();scene.add(lens);
+
+// ---------- aperture diaphragm (plate with variable opening) ----------
+const stop={group:new THREE.Group(),mesh:null,blades:null};
+function makeStop(shape,radius){
+  const g=stop.group;while(g.children.length){const c=g.children.pop();c.geometry&&c.geometry.dispose();}
+  const outerR=OPT.R*1.45;
+  const sh=new THREE.Shape();sh.absarc(0,0,outerR,0,TAU,false);
+  const hole=new THREE.Path();
+  const pts=shapePoints(shape,radius,96);
+  pts.forEach((p,i)=>i?hole.lineTo(p[0],p[1]):hole.moveTo(p[0],p[1]));hole.closePath();
+  sh.holes.push(hole);
+  const geo=new THREE.ShapeGeometry(sh,32);
+  const mesh=new THREE.Mesh(geo,new THREE.MeshBasicMaterial({color:0x151c30,side:THREE.DoubleSide,transparent:true,opacity:0.92}));
+  g.add(mesh);
+  const edge=new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts.map(p=>new THREE.Vector3(p[0],p[1],0.001))),lineMat(COL.warm,1));
+  g.add(edge);
+  g.rotation.y=Math.PI/2; // plate normal along X
+}
+// outline of aperture shape, radius = circumradius
+function shapePoints(shape,r,n){
+  const out=[];
+  if(shape==='circle'){for(let i=0;i<n;i++){const a=i/n*TAU;out.push([r*Math.cos(a),r*Math.sin(a)]);}}
+  else if(shape==='hex'||shape==='pent'||shape==='tri'||shape==='oct'){
+    const k={tri:3,pent:5,hex:6,oct:8}[shape];
+    for(let i=0;i<k;i++){const a=i/k*TAU+Math.PI/2;out.push([r*Math.cos(a),r*Math.sin(a)]);}
+  } else if(shape==='heart'){
+    const sc=r/0.6716;
+    for(let i=0;i<n;i++){const t=i/n*TAU;
+      const x=16*Math.pow(Math.sin(t),3);
+      const y=13*Math.cos(t)-5*Math.cos(2*t)-2*Math.cos(3*t)-Math.cos(4*t);
+      out.push([x/17*0.62*sc*1.08,(y+1.2)/17*0.62*sc*1.08]);}
+  } else if(shape==='star'){
+    for(let i=0;i<10;i++){const a=i/10*TAU+Math.PI/2;const rr=i%2?r*0.45:r;out.push([rr*Math.cos(a),rr*Math.sin(a)]);}
   }
-  g.restore();
+  return out;
 }
-function ring(x,y,r,col,w=2,a=1){
-  g.save();g.globalAlpha=GA*a;g.strokeStyle=col;g.lineWidth=w;
-  g.beginPath();g.arc(x,y,r,0,TAU);g.stroke();g.restore();
-}
-function line(x1,y1,x2,y2,col,w=1,a=1,blur=0){
-  g.save();g.globalAlpha=GA*a*(1-Math.min(blur,30)/45);g.strokeStyle=col;g.lineWidth=w;
-  g.beginPath();g.moveTo(x1,y1);g.lineTo(x2,y2);g.stroke();g.restore();
-}
-function glow(x,y,r,col,a=1){
-  g.save();g.globalAlpha=GA*a;
-  const gr=g.createRadialGradient(x,y,0,x,y,r);
-  gr.addColorStop(0,col);gr.addColorStop(1,'rgba(0,0,0,0)');
-  g.fillStyle=gr;g.beginPath();g.arc(x,y,r,0,TAU);g.fill();g.restore();
-}
-function text(s,x,y,size,col,a=1,align='left'){
-  g.save();g.globalAlpha=GA*a;g.fillStyle=col;
-  g.font=`${size}px "SF Mono",Menlo,Consolas,monospace`;g.textAlign=align;g.fillText(s,x,y);g.restore();
-}
-function hexPath(cx,cy,r){
-  g.beginPath();
-  for(let i=0;i<6;i++){const a=i*TAU/6+Math.PI/6;const x=cx+r*Math.cos(a),y=cy+r*Math.sin(a);i?g.lineTo(x,y):g.moveTo(x,y);}
-  g.closePath();
-}
-function person(x,base,h,col,blur=0,a=1){
-  const hr=h*0.085, headY=base-h+hr;
-  circ(x,headY,hr,col,blur,a);
-  g.save();g.globalAlpha=GA*a*(1-Math.min(blur,30)/60);g.fillStyle=col;
-  g.beginPath();g.ellipse(x,base-h*0.28,h*0.19,h*0.30,0,0,TAU);g.fill();
-  g.beginPath();g.ellipse(x,base-h*0.02,h*0.12,h*0.06,0,0,TAU);g.fill();
-  g.restore();
-}
+makeStop('circle',1.0);scene.add(stop.group);
 
-// ---------- scenes (u = local time) ----------
-// A 0-8s : hook — bokeh light, focus pull
-function drawA(u){
-  bg();
-  const b=kf([[0,46],[2.2,1.2],[8,1.2]],u);
-  glow(640,360,300,'rgba(242,197,114,0.22)',1);
-  circ(640,360,40,'#f2c572',b*1.6,0.28);
-  circ(640,360,18,'#f2c572',b,1);
-  ring(640,360,70+u*6,'rgba(111,211,255,0.25)',1.5,ease(u/1.5));
-}
+// ---------- sensor plane ----------
+const sensorGrp=new THREE.Group();
+const sensorMesh=new THREE.Mesh(new THREE.PlaneGeometry(4.6,3.0),new THREE.MeshBasicMaterial({color:0x10213f,transparent:true,opacity:0.35,side:THREE.DoubleSide,depthWrite:false}));
+sensorMesh.rotation.y=Math.PI/2;sensorGrp.add(sensorMesh);
+const sFrame=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.PlaneGeometry(4.6,3.0)),lineMat(COL.cool,0.9));sFrame.rotation.y=Math.PI/2;sensorGrp.add(sFrame);
+scene.add(sensorGrp);
 
-// B 8-19s : iris snaps open/closed on each beat
-function drawB(u){
-  bg();
-  const f=fB(u), R=250, cx=640, cy=360;
-  const ra=60+170*(1.4/f);
-  circ(cx,cy,R,'#0d1322',0,1);
-  glow(cx,cy,ra*2.2,'rgba(111,211,255,0.55)',1);
-  g.save();g.globalAlpha=GA;g.fillStyle='rgba(235,248,255,0.95)';hexPath(cx,cy,ra);g.fill();g.restore();
-  const tw=0.9*(1-ra/R)+0.25;
-  for(let i=0;i<6;i++){
-    const a=i*TAU/6+Math.PI/6;
-    line(cx+ra*Math.cos(a),cy+ra*Math.sin(a),cx+R*Math.cos(a+tw),cy+R*Math.sin(a+tw),'#2a3550',16,1);
+// ---------- a light source with its ray bundle ----------
+// ray bundle: N rays from source S through aperture ring points on the lens plane, refracted toward image point I.
+class RayBundle{
+  constructor(color,nRays=36,rings=3){
+    this.color=color;this.n=nRays;this.rings=rings;
+    const count=nRays*rings;
+    this.count=count;
+    this.geoIn=new THREE.BufferGeometry();this.geoOut=new THREE.BufferGeometry();
+    this.posIn=new Float32Array(count*2*3);this.posOut=new Float32Array(count*2*3);
+    this.geoIn.setAttribute('position',new THREE.BufferAttribute(this.posIn,3));
+    this.geoOut.setAttribute('position',new THREE.BufferAttribute(this.posOut,3));
+    this.matIn=lineMat(color,0.22);this.matOut=lineMat(color,0.42);
+    this.lIn=new THREE.LineSegments(this.geoIn,this.matIn);this.lOut=new THREE.LineSegments(this.geoOut,this.matOut);
+    this.lIn.frustumCulled=false;this.lOut.frustumCulled=false;
+    this.group=new THREE.Group();this.group.add(this.lIn,this.lOut);
+    // moving photons
+    const pc=count;this.pPos=new Float32Array(pc*3);
+    this.pGeo=new THREE.BufferGeometry();this.pGeo.setAttribute('position',new THREE.BufferAttribute(this.pPos,3));
+    this.pMat=ptsMat(0xffffff,0.13,1);this.photons=new THREE.Points(this.pGeo,this.pMat);this.photons.frustumCulled=false;
+    this.group.add(this.photons);
+    // source + image glow
+    this.srcGlow=glowSprite(color,1.2,1);this.imgGlow=glowSprite(color,0.8,1);
+    this.group.add(this.srcGlow,this.imgGlow);
   }
-  ring(cx,cy,R,'rgba(111,211,255,0.6)',3,1);
-  text('光圈 Aperture',cx,88,26,'#6fd3ff',0.9,'center');
-  text('f/'+f.toFixed(1),1040,330,44,'#f2c572',1,'center');
-  text(f>8?'门收窄 · 进光少':'门开大 · 进光多',1040,372,20,'#e9edf5',0.6,'center');
-}
-
-// C 19-33s : same point source, two apertures -> different blur disc
-function panel(ox,f,col,label,p){
-  const D=320/f, cy=360, src=ox+90, L=ox+330, xf=ox+530, xs=ox+470;
-  g.save();g.globalAlpha=GA*p;g.fillStyle='#253049';
-  g.fillRect(L-7,90,14,cy-D/2-90);g.fillRect(L-7,cy+D/2,14,630-(cy+D/2));
-  g.restore();
-  for(const e of [cy-D/2,cy+D/2]){
-    line(src,cy,L,e,'rgba(230,245,255,0.35)',2,p);
-    const ys=cy+(e-cy)*(xf-xs)/(xf-L);
-    line(L,e,xs,ys,col,2,0.75*p);
+  // S=[x,y,z] source (x<0), sensorX, aperR (radius), imageDist along axis from lens; reveal progress p in [0,1] over in-ray / out-ray phases
+  update(S,sensorX,aperR,aperShape,revealIn,revealOut,photonT,imgPos=null){
+    const u=-S[0];const v=imgDist(u);
+    // image point (thin lens, magnification -v/u)
+    const m=-v/u;
+    const I=imgPos||[v, S[1]*m, S[2]*m];
+    this.I=I;
+    const n=this.n,rg=this.rings;let k=0;
+    for(let ri=0;ri<rg;ri++){
+      const rr=aperR*Math.sqrt((ri+0.6)/(rg-0.1))*0.97;
+      for(let i=0;i<n;i++){
+        const a=i/n*TAU+ri*0.21;
+        // sample position on aperture respecting shape
+        const sp=shapeRadiusScale(aperShape,a);
+        const ly=rr*sp*Math.cos(a), lz=rr*sp*Math.sin(a);
+        const P=[0,ly,lz];
+        // in: S -> P
+        const inEnd=[lerp(S[0],P[0],revealIn),lerp(S[1],P[1],revealIn),lerp(S[2],P[2],revealIn)];
+        this.posIn.set([S[0],S[1],S[2],inEnd[0],inEnd[1],inEnd[2]],k*6);
+        // out: P -> continues past the image point to sensorX, in straight line
+        const dir=[I[0]-P[0],I[1]-P[1],I[2]-P[2]];
+        const tEnd=(sensorX-P[0])/dir[0];
+        const E=[P[0]+dir[0]*tEnd,P[1]+dir[1]*tEnd,P[2]+dir[2]*tEnd];
+        const outEnd=[lerp(P[0],E[0],revealOut),lerp(P[1],E[1],revealOut),lerp(P[2],E[2],revealOut)];
+        this.posOut.set([P[0],P[1],P[2],outEnd[0],outEnd[1],outEnd[2]],k*6);
+        // photon
+        const ph=(photonT+((ri*7+i*3)%11)/11)%1;
+        let q;
+        if(ph<0.5){const t=ph/0.5*revealIn;q=[lerp(S[0],P[0],t),lerp(S[1],P[1],t),lerp(S[2],P[2],t)];}
+        else{const t=(ph-0.5)/0.5*revealOut;q=[lerp(P[0],E[0],t),lerp(P[1],E[1],t),lerp(P[2],E[2],t)];}
+        this.pPos.set(q,k*3);
+        k++;
+      }
+    }
+    this.geoIn.attributes.position.needsUpdate=true;this.geoOut.attributes.position.needsUpdate=true;this.pGeo.attributes.position.needsUpdate=true;
+    this.srcGlow.position.set(S[0],S[1],S[2]);
+    this.imgGlow.position.set(I[0],I[1],I[2]);
+    return {I,m,v};
   }
-  line(xs,130,xs,590,'#5b6785',2,0.6*p);
-  circ(src,cy,6,'#ffffff',0,p);
-  circ(xf,cy,3,col,0,0.6*p);
-  circ(xs,cy,Math.max(2,0.15*D),col,1,p);
-  text(label,ox+320,120,24,col,p,'center');
-  text('光斑 disc ≈ '+(0.3*D).toFixed(0)+' px',xs,cy+120,18,'#e9edf5',0.7*p,'center');
 }
-function drawC(u){
-  bg();
-  const p=ease(u/1.2);
-  panel(0,16,'#6fd3ff','f/16 · 光圈小 Small aperture',p);
-  panel(640,2,'#f2c572','f/2 · 光圈大 Wide aperture',p);
-  line(640,60,640,660,'#1d2740',2,1);
-}
-
-// D 33-47s : depth of field — sharpness band snaps with aperture
-function drawD(u){
-  bg();
-  const f=fD(u), band=0.15+0.05*f;
-  const bl=dz=>Math.min(40,150/f*Math.max(0,Math.abs(dz)-band));
-  for(let i=0;i<22;i++){
-    const x=(i*97+(i*i*37)%113)%1280, y=250+((i*53)%90), r=5+(i%3)*3;
-    circ(x,y,r,'#f2c572',bl(1.6),0.9);
+// shape correction so rings follow polygon/heart outlines of the aperture
+function shapeRadiusScale(shape,a){
+  if(shape==='circle') return 1;
+  const k={tri:3,pent:5,hex:6,oct:8}[shape];
+  if(k){const seg=TAU/k;const aa=((a-Math.PI/2)%seg+seg)%seg-seg/2;return Math.cos(Math.PI/k)/Math.cos(aa);}
+  if(shape==='heart'){ // radial profile of the heart outline
+    const t=a;const pts=shapePoints('heart',1,180);let best=1,bd=1e9;
+    for(const p of pts){const ang=Math.atan2(p[1],p[0]);let d=Math.abs(((ang-a+Math.PI*3)%TAU)-Math.PI);if(d<bd){bd=d;best=Math.hypot(p[0],p[1]);}}
+    return best;
   }
-  person(640,540,270,'#f2c572',bl(0),1);
-  for(let i=0;i<26;i++){
-    const x=(i*53)%1320-20, h=120+((i*71)%150);
-    line(x,740,x+((i%2)?12:-10),740-h,'#6fd3ff',6,0.55,bl(-1.1));
-  }
-  text('f/'+f.toFixed(1),640,70,40,'#f2c572',1,'center');
-  text('景深 Depth of field',640,108,22,'#6fd3ff',0.9,'center');
-  const bw=band*420;
-  g.save();g.globalAlpha=GA*0.9;g.fillStyle='rgba(242,197,114,0.18)';g.fillRect(640-bw/2,150,bw,10);g.restore();
-  line(640-210,155,640+210,155,'#34405a',2,0.8);
+  if(shape==='star'){const seg=TAU/5;const aa=((a-Math.PI/2)%seg+seg)%seg;const t=Math.abs(aa-seg/2)/(seg/2);return lerp(1,0.45,1-t);}
+  return 1;
 }
 
-// E 47-53s : human touch — subject sharp, crowd soft
-function drawE(u){
-  bg();
-  let seed=7;const rnd=()=>{seed=(seed*16807)%2147483647;return seed/2147483647;};
-  for(let i=0;i<22;i++){
-    const x=rnd()*W, y=rnd()*H*0.8, r=26+rnd()*40;
-    circ(x,y,r,i%2?'#f2c572':'#6fd3ff',34,0.32);
-  }
-  glow(640,240,260,'rgba(255,217,160,0.35)',1);
-  person(980,560,340,'#8fa0c4',10,0.45);
-  person(260,560,320,'#8fa0c4',12,0.4);
-  person(640,570,400,'#ffe0b0',0,1);
-}
 
-// F 53-60s : echo of the opening — light softens back into bokeh
-function drawF(u){
-  bg();
-  const b=kf([[0,1],[4,30],[7,46]],u);
-  glow(640,360,320,'rgba(242,197,114,0.22)',1);
-  circ(640,360,40,'#f2c572',b*1.6,0.28);
-  circ(640,360,18,'#f2c572',b,1);
-}
+// ================= scene objects =================
+const sensorX=OPT.f*2;                 // object at 2f -> image at 2f (1:1), good default
+const SRC=[-6.0,0.0,0.0];              // main point source
+const beamMain=new RayBundle(COL.warm,48,4); scene.add(beamMain.group);
 
-const SC=[[0,8,drawA],[8,19,drawB],[19,33,drawC],[33,47,drawD],[47,53,drawE],[53,60,drawF]];
-
-// Camera per scene: x,y pan (px), s zoom, r roll (rad); u = local time
-const CAM=[
-  u=>({x:-40*ease(u/8), y:0,  s:1+0.30*ease(u/8)+0.015*beat(u), r:0}),           // A slow push-in + drift
-  u=>({x:0, y:0, s:1.02+0.05*beat(u), r:0.035*Math.sin(u*0.9)}),                 // B iris: beat breathe + roll
-  u=>({x:-140*ease(u/14), y:0, s:1+0.22*ease(u/14)+0.01*beat(u), r:0}),          // C dolly across both lenses
-  u=>({x:140*Math.sin(u*0.45), y:0, s:1.06+0.12*ease(u/14), r:0}),               // D lateral track
-  u=>({x:0, y:-25*ease(u/6), s:1+0.22*ease(u/6)+0.015*beat(u), r:0}),           // E quick push onto subject
-  u=>({x:0, y:0, s:1.3-0.3*ease(u/7), r:-0.03*ease(u/7)})                         // F pull-back to bokeh
+// extra sources for the "many objects" scene (near / focus / far)
+const objs=[
+  {S:[-4.2, 0.9, 1.6], col:COL.rose, bundle:null},
+  {S:[-6.0, 0.0, 0.0], col:COL.warm, bundle:null},
+  {S:[-10.5,-0.6,-1.8], col:COL.cool, bundle:null},
 ];
-function drawCam(idx,u,ucam){
-  const c=CAM[idx](ucam);
-  g.save();
-  g.translate(W/2,H/2); g.rotate(c.r); g.scale(c.s,c.s); g.translate(-W/2+c.x,-H/2+c.y);
-  SC[idx][2](u);
-  g.restore();
-}
+objs.forEach(o=>{o.bundle=new RayBundle(o.col,24,2);scene.add(o.bundle.group);});
 
-// ---------- bilingual captions: [start, end, 中文, English] ----------
+// circle-of-confusion disc on the sensor (shape follows aperture)
+const cocGroup=new THREE.Group();scene.add(cocGroup);
+const cocMat=new THREE.MeshBasicMaterial({color:COL.warm,transparent:true,opacity:0.9,blending:THREE.AdditiveBlending,side:THREE.DoubleSide,depthWrite:false});
+let cocMesh=null,cocShape='';
+function setCoc(shape){
+  if(cocMesh){cocGroup.remove(cocMesh);cocMesh.geometry.dispose();}
+  const pts=shapePoints(shape,1,96);const sh=new THREE.Shape();pts.forEach((q,i)=>i?sh.lineTo(q[0],q[1]):sh.moveTo(q[0],q[1]));sh.closePath();
+  cocMesh=new THREE.Mesh(new THREE.ShapeGeometry(sh),cocMat);cocMesh.rotation.y=Math.PI/2;cocGroup.add(cocMesh);cocShape=shape;
+}
+setCoc('circle');
+
+// ================= HUD data =================
+const SCN=[
+ {t:0,  tag:'序章 · 一个光点',          en:'Prologue · A point of light'},
+ {t:6,  tag:'光线 · 从点到像',          en:'Rays · from point to image'},
+ {t:16, tag:'离焦 · 弥散圆',            en:'Defocus · circle of confusion'},
+ {t:26, tag:'光圈 · 收窄的门',          en:'Aperture · a narrowing door'},
+ {t:36, tag:'景深 · 多个物体',          en:'Depth of field · many objects'},
+ {t:46, tag:'叶片 · 焦外的形状',        en:'Blades · the shape of bokeh'},
+ {t:53, tag:'回响 · 回到那个点',        en:'Echo · back to the point'},
+];
 const CAPS=[
- [0,4.5,"你有没有想过：同一张照片里，为什么有的地方模糊，有的地方清晰？","Why is one part of a photo sharp while another melts into blur?"],
- [4.5,8,"答案藏在镜头里的一扇小门。","The answer lies in a small door inside the lens."],
- [8,14,"光圈，就是这扇门。门开得越大，进入的光越多。","The aperture is that door. The wider it opens, the more light gets in."],
- [14,19,"f 数值越小，门开得越大。","A smaller f-number means a wider opening."],
- [19,26,"对焦平面之外的光，不会汇聚成一个点，而是扩散成光斑。","Light from outside the focus plane never converges to a point. It spreads into a disc."],
- [26,33,"门越大，光斑越大，背景就越模糊。","The wider the opening, the larger the disc, and the blurrier the background."],
- [33,40,"门收得越小，光斑越小，清楚的范围就越宽。","Narrow the opening, and the zone of sharpness widens."],
- [40,47,"景深，就是画面中看起来足够清楚的前后距离。","Depth of field is the range in front of and behind the subject that still looks sharp."],
- [47,53,"镜头选择的不只是清晰，也是注视。","A lens chooses more than sharpness. It chooses what we attend to."],
- [53,60,"此刻，你想让生活的哪一部分留在清晰里？","What part of your life do you want to keep in focus?"]
+ [0,3,"一个光点，在黑暗里。","A point of light in the dark."],
+ [3,6,"它时而清晰，时而模糊——为什么？","Sometimes sharp, sometimes soft. Why?"],
+ [6,11,"光点向四面八方发出光线，其中一部分进入镜头。","The point sends rays in every direction. Some of them enter the lens."],
+ [11,16,"透镜把它们折向同一侧，在一个位置重新汇聚成点。","The lens bends them back together, converging again to a single point."],
+ [16,21,"传感器恰好在汇聚处，得到一个清晰的点。","With the sensor exactly there, the point stays sharp."],
+ [21,26,"传感器偏离汇聚处，光线还没汇聚或已散开，点就变成一个圆斑。","Move the sensor off that place, and the point becomes a disc: the circle of confusion."],
+ [26,31,"光圈像一扇可以收窄的门，只放行靠中心的光线。","The aperture is a door that narrows, letting only central rays through."],
+ [31,36,"门越窄，圆斑越小——不那么准的对焦，也依然显得清楚。","A narrower door means a smaller disc, so even imperfect focus still looks sharp."],
+ [36,41,"现在换成远、中、近三个物体：只有中间的恰好对焦。","Now three objects: near, middle, far. Only the middle is in perfect focus."],
+ [41,46,"光圈越大，前后两个越模糊；光圈越小，清楚的范围越宽。这就是景深。","A wider aperture blurs the others more; a smaller one widens the zone of sharpness. That is depth of field."],
+ [46,49,"光圈叶片的形状，决定焦外光斑的形状。","The shape of the aperture blades decides the shape of the out-of-focus highlights."],
+ [49,53,"六边形，心形，星形……镜头也有自己的性格。","Hexagons, hearts, stars… every lens has its own character."],
+ [53,57,"镜头选择的不只是清晰，也是我们愿意注视什么。","A lens chooses more than sharpness. It chooses what we choose to look at."],
+ [57,60,"此刻，你想让生活的哪一部分留在清晰里？","What part of your life do you want to keep in focus?"]
 ];
-let lastCap=-2;
-function updateCaps(tt){
-  const i=CAPS.findIndex(c=>tt>=c[0]&&tt<c[1]);
-  if(i!==lastCap){
-    lastCap=i;
-    zhEl.textContent=i<0?'':CAPS[i][2];
-    enEl.textContent=i<0?'':CAPS[i][3];
-  }
+let lastCap=-2,lastScn=-2;
+function updateHud(tt){
+  const ci=CAPS.findIndex(c=>tt>=c[0]&&tt<c[1]);
+  if(ci!==lastCap){lastCap=ci;$('zh').textContent=ci<0?'':CAPS[ci][2];$('en').textContent=ci<0?'':CAPS[ci][3];}
+  let si=0;for(let i=0;i<SCN.length;i++) if(tt>=SCN[i].t) si=i;
+  if(si!==lastScn){lastScn=si;$('tag').innerHTML=SCN[si].tag+'<small>'+SCN[si].en+'</small>';}
 }
 
-// ---------- render ----------
+// ================= timeline =================
+// camera keyframes: [t, pos, lookAt]
+const CAMK=[
+ // A 0-6  prologue: hover close to the light, slow orbit-in
+ [0,  [-9.0, 0.4, 3.6], [-6,0,0]],
+ [6,  [-7.4, 0.2, 2.2], [-6,0,0]],
+ // B 6-16 follow the rays: source -> lens -> convergence
+ [8,  [-11.0, 2.6, 8.5], [-3,0,0]],
+ [11, [-4.5, 3.0, 8.0], [0,0,0]],
+ [13, [ 2.5, 2.6, 7.6], [3,0,0]],
+ [16, [ 9.5, 3.2, 8.2], [6,0,0]],
+ // C 16-26 sensor off-focus: swing round to the side then behind the sensor
+ [20, [ 4.0, 4.5, 6.2], [6,0,0]],
+ [24, [12.5, 1.2, 3.5], [6,0,0]],
+ [26, [ 2.0, 1.2, 4.6], [1,0,0]],
+ // D 26-36 aperture closes: low angle through the lens axis, then pull back
+ [29, [-5.0, 1.4, 5.2], [0,0,0]],
+ [33, [-1.5, 3.8, 6.8], [2,0,0]],
+ [36, [-11.0, 3.6, 8.2],[-5,0,0]],
+ // E 36-46 many objects: big lateral track
+ [41, [-2.0, 3.0, 11.5],[-5,0,0]],
+ [46, [ 6.5, 1.8, 7.0], [4,0,0]],
+ // F 46-53 blade shapes: face the diaphragm, fly through its opening into a field of shaped highlights
+ [47.2,[-4.6, 0.3, 0.5], [0,0,0]],
+ [49.6,[-1.2, 0.1, 0.1], [8,0,0]],
+ [51.4,[ 1.4, 0.0, 0.0], [8,0,0]],
+ [52.6,[ 2.8, 0.0, 0.0], [8,0,0]],
+ [53.0,[-7.0, 0.5, 4.5], [-6,0,0]],
+ // G 53-60 echo: pull away from the point
+ [60, [-12.5, 0.9, 7.5],[-6,0,0]],
+];
+function setCamera(tt){
+  const pos=kfv(CAMK.map(k=>[k[0],k[1]]),tt,sm5);
+  const look=kfv(CAMK.map(k=>[k[0],k[2]]),tt,sm5);
+  // gentle handheld-free drift (slow, not beat-locked)
+  const dr=0.06;
+  camera.position.set(pos[0]+Math.sin(tt*0.7)*dr,pos[1]+Math.cos(tt*0.55)*dr,pos[2]);
+  camera.lookAt(look[0],look[1],look[2]);
+  // subtle roll at the bigger moves
+  camera.rotation.z+=0.02*Math.sin(tt*0.4);
+}
+
+// aperture f-number schedule (smaller N = bigger opening)
+const fN=t=>kf([[0,1.8],[26,1.8],[31,9],[36,9],[38,2.0],[43,2.0],[44.5,11],[46,11],[46.5,1.6],[60,1.6]],t);
+// sensor offset schedule (0 = in focus)
+const sensorOff=t=>kf([[0,0],[16,0],[18,0],[21,0],[22,-1.1],[24,-1.1],[25,0.9],[26,0],[36,0],[60,0]],t);
+const shapeAt=t=>t<46.8?'circle':t<49.0?'hex':t<51.0?'heart':t<53?'star':'circle';
+
+// beat accents: only at key moments (not the whole film)
+const ACC=[0,6,11,16,21,26,31,36,41,46,50,53,57];
+function accent(tt){let a=0;for(const k of ACC){const d=tt-k;if(d>=0&&d<0.5)a=Math.max(a,Math.exp(-d*9));}return a;}
+
+// ================= render(t): pure function of t =================
 function render(tt){
   T=tt;
-  let idx=SC.findIndex(s=>tt<s[1]);
-  if(idx<0) idx=SC.length-1;
-  const u=tt-SC[idx][0];
-  g.setTransform(1,0,0,1,0,0);
-  if(idx>0 && u<XF){
-    // short cross-dissolve from the previous scene's final frame
-    const d=SC[idx-1][1]-SC[idx-1][0];
-    GA=1; drawCam(idx-1,d,d);
-    GA=ease(u/XF);
-  } else GA=1;
-  drawCam(idx,u,u);
-  GA=1;
-  // light flash on each cut (beat-aligned: all cuts fall on whole beats)
-  if(idx>0 && u<0.12){
-    g.save();g.setTransform(1,0,0,1,0,0);g.globalAlpha=0.18*(1-u/0.12);g.fillStyle='#fff';g.fillRect(0,0,W,H);g.restore();
+  setCamera(tt);
+
+  const N=fN(tt), shape=shapeAt(tt);
+  const aR=apertureRadius(N);
+  const sx=sensorX+sensorOff(tt);
+
+  // --- aperture plate & lens ---
+  const showLens=tt>=5.6 && tt<46;
+  lens.visible=showLens;stop.group.visible=(tt>=25.2 && tt<50.4);
+  sensorGrp.visible=showLens;
+  grid.visible=tt>=5.6 && tt<46;
+  if(stop._shape!==shape||Math.abs((stop._r||0)-aR)>0.004){makeStop(shape,aR);stop._shape=shape;stop._r=aR;}
+  stop.group.position.x=0.02;
+  sensorGrp.position.x=sx;
+
+  // --- prologue and epilogue light ---
+  const pro=tt<6, epi=tt>=53;
+  const bokeh = pro ? kf([[0,3.8],[3.2,3.8],[5.2,0.34],[6,0.34]],tt,sm5) : epi ? kf([[53,0.34],[56.5,0.34],[59,4.2],[60,4.2]],tt,sm5) : 0.34;
+
+  // --- main bundle ---
+  const revealIn = kf([[6,0],[10,1]],tt,sm5);
+  const revealOut = kf([[10.4,0],[13.8,1]],tt,sm5);
+  const showMain = tt>=5.6 && tt<36;
+  beamMain.group.visible = showMain;
+  let info=null;
+  if(showMain){
+    info=beamMain.update(SRC,sx,aR,shape,revealIn,revealOut,(tt*0.45)%1);
   }
-  if(tt>58.5){
-    g.save();g.setTransform(1,0,0,1,0,0);g.globalAlpha=Math.min(1,(tt-58.5)/1.5);g.fillStyle='#000';g.fillRect(0,0,W,H);g.restore();
+  // prologue/epilogue standalone light: one big glow sprite that breathes with focus
+  proGlow.visible = pro||epi;
+  if(pro||epi){
+    proGlow.position.set(SRC[0],SRC[1],SRC[2]);proHalo.position.copy(proGlow.position);proHalo.visible=true;proHalo.material.opacity=0.22;
+    proGlow.scale.setScalar(bokeh*0.42+0.25);
+    proGlow.material.opacity = 0.18+0.82*(1-clamp((bokeh-0.34)/3.8));
+    proCore.visible=true;proCore.position.copy(proGlow.position);
+    proCore.scale.setScalar(0.35*(0.4+0.6*(1-clamp((bokeh-0.34)/3.8))));
+    proCore.material.opacity=1-clamp((bokeh-0.34)/2.2);
+  } else {proCore.visible=false;proHalo.visible=false;}
+  srcDot.visible=showMain; srcDot.position.set(SRC[0],SRC[1],SRC[2]);
+  beamMain.srcGlow.visible=showMain; beamMain.imgGlow.visible=showMain && tt>=12.4;
+
+  // --- circle of confusion on the sensor ---
+  const defocus=Math.abs(sensorOff(tt));
+  const showCoc = showMain && tt>=14 && tt<36;
+  cocGroup.visible=showCoc;
+  if(showCoc){
+    if(cocShape!==shape) setCoc(shape);
+    // CoC radius where sensor plane cuts the cone: r = aR * |sx - v| / v
+    const v=info?info.v:imgDist(-SRC[0]);
+    const r=Math.max(0.05, aR*Math.abs(sx-v)/v);
+    cocGroup.position.set(sx+0.01,SRC[1]*(-v/-SRC[0]),0);
+    cocGroup.scale.setScalar(r);
+    cocMat.opacity=clamp(0.85*0.7/(0.4+r*r*2.6),0.18,0.95);
   }
-  updateCaps(tt);
+
+  // --- many objects (scene E) ---
+  const showMany = tt>=36 && tt<46.9;
+  objs.forEach((o,i)=>{
+    o.bundle.group.visible=showMany;
+    if(!showMany) return;
+    const rin=sm5((tt-36.4-i*0.25)/1.1);
+    const rout=sm5((tt-37.4-i*0.25)/1.1);
+    const inf=o.bundle.update(o.S,sensorX,aR,shape,rin,rout,(tt*0.45+i*0.31)%1);
+    // CoC of each object on the fixed sensor
+    const u=-o.S[0],v=imgDist(u);
+    o.coc=aR*Math.abs(sensorX-v)/v;
+    o.v=v;
+  });
+  // blur discs (bokeh) on sensor for each object
+  manyGroup.visible=showMany;
+  if(showMany){
+    if(manyShape!==shape) buildMany(shape);
+    objs.forEach((o,i)=>{
+      const v=o.v,m=-v/(-o.S[0]);
+      const r=Math.max(0.05,o.coc||0.05);
+      const d=manyDiscs[i];
+      d.position.set(sensorX+0.01,o.S[1]*m,o.S[2]*m);
+      d.scale.setScalar(r);
+      d.material.opacity=clamp(0.9*0.5/(0.3+r*r*3.2),0.12,0.95);
+    });
+  }
+
+  // --- bokeh shape showcase (scene F) : discs at the sensor in the aperture shape ---
+  const showBokeh = tt>=47.6 && tt<53;
+  bokehGroup.visible=showBokeh;
+  if(showBokeh){
+    if(bokehShape!==shape) buildBokeh(shape);
+    const e=sm5((tt-47.8)/1.6);
+    bokehGroup.children.forEach((d,i)=>{
+      const r=d.userData.r0*(1+0.12*Math.sin(tt*0.8+i));
+      d.scale.setScalar(r*e);
+    });
+    bokehGroup.rotation.z = 0; 
+  }
+
+  // --- accents: a gentle bloom pulse only on key frames ---
+  const acc=accent(tt);
+  bloom.strength=BL_S+0.3*acc;
+  camera.fov=46-2.2*acc; camera.updateProjectionMatrix();
+
+  // dust parallax
+  dust.position.x=-tt*0.12;
+  dust.visible=true;
+
+  composer.render();
+
+  // --- HUD ---
+  updateHud(tt);
+  const dip=(c,w)=>clamp(1-Math.abs(tt-c)/w);
+  const fadeA=Math.max(clamp(1-tt/0.9),dip(5.8,0.45),dip(52.7,0.5),clamp((tt-58.6)/1.4));
+  $('fade').style.opacity=sm(fadeA).toFixed(3);
+  const rd=$('read');
+  if(tt>=24 && tt<46.9) rd.innerHTML='f/'+N.toFixed(1)+'<small>光圈 · Aperture</small>';
+  else if(tt>=14 && tt<26) rd.innerHTML='偏移 '+defocus.toFixed(2)+'<small>传感器离焦 · Sensor offset</small>';
+  else if(tt>=46 && tt<53) rd.innerHTML={circle:'圆形',hex:'六边形',heart:'心形',star:'星形'}[shape]+'<small>叶片形状 · Blade shape</small>';
+  else rd.innerHTML='';
   prog.style.width=(tt/DUR*100)+'%';
   tlabel.textContent=tt.toFixed(1)+' / 60s';
 }
 
-// ---------- controls ----------
-function setPlaying(p){
-  playing=p;
-  btn.textContent=p?'❚❚ 暂停 / Pause':'▶ 播放 / Play';
-  if(p){
-    if(T>=DUR) T=0;
-    audio.currentTime=T;
-    audio.play().catch(()=>{});
-    lastNow=null;
-  } else {
-    audio.pause();
+
+// ---------- prologue/epilogue light, source dot ----------
+const proGlow=discSprite(COL.warm,2,1);scene.add(proGlow);const proHalo=glowSprite(COL.warm,4.2,0.3);scene.add(proHalo);
+const proCore=glowSprite(0xffffff,0.5,1);scene.add(proCore);
+const srcDot=new THREE.Mesh(new THREE.SphereGeometry(0.09,16,16),new THREE.MeshBasicMaterial({color:0xfff3d0}));scene.add(srcDot);
+
+// ---------- many-objects blur discs on the sensor ----------
+const manyGroup=new THREE.Group();scene.add(manyGroup);
+const manyDiscs=[];let manyShape='';
+function buildMany(shape){
+  while(manyGroup.children.length){const c=manyGroup.children.pop();c.geometry.dispose();}
+  manyDiscs.length=0;
+  const pts=shapePoints(shape,1,96);
+  objs.forEach(o=>{
+    const sh=new THREE.Shape();pts.forEach((q,i)=>i?sh.lineTo(q[0],q[1]):sh.moveTo(q[0],q[1]));sh.closePath();
+    const m=new THREE.Mesh(new THREE.ShapeGeometry(sh),new THREE.MeshBasicMaterial({color:o.col,transparent:true,opacity:0.8,blending:THREE.AdditiveBlending,side:THREE.DoubleSide,depthWrite:false}));
+    m.rotation.y=Math.PI/2;manyGroup.add(m);manyDiscs.push(m);
+  });
+  manyShape=shape;
+}
+buildMany('circle');
+
+// ---------- bokeh-shape showcase: field of highlights in the aperture shape ----------
+const bokehGroup=new THREE.Group();scene.add(bokehGroup);let bokehShape='';
+function buildBokeh(shape){
+  while(bokehGroup.children.length){const c=bokehGroup.children.pop();c.traverse(o=>{o.geometry&&o.geometry.dispose();});}
+  const pts=shapePoints(shape,1,96);
+  let s=5;const r=()=>{s=(s*16807)%2147483647;return s/2147483647;};
+  const cols=[COL.warm,COL.warm,0xffe6b0,COL.cool];
+  for(let i=0;i<58;i++){
+    const sh=new THREE.Shape();pts.forEach((q,k)=>k?sh.lineTo(q[0],q[1]):sh.moveTo(q[0],q[1]));sh.closePath();
+    const col=cols[i%4];
+    const grp=new THREE.Group();
+    grp.add(new THREE.Mesh(new THREE.ShapeGeometry(sh),new THREE.MeshBasicMaterial({color:col,transparent:true,opacity:0.10+0.16*r(),blending:THREE.AdditiveBlending,side:THREE.DoubleSide,depthWrite:false})));
+    const rim=new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(pts.map(q=>new THREE.Vector3(q[0],q[1],0.002))),new THREE.LineBasicMaterial({color:col,transparent:true,opacity:0.5,blending:THREE.AdditiveBlending,depthWrite:false}));
+    grp.add(rim);
+    grp.position.set(0,lerp(-3.0,3.0,r()),lerp(-4.6,4.6,r()));   // plane x=0 of the group, faces +X
+    grp.userData.r0=0.16+0.34*r()*r();
+    grp.rotation.y=Math.PI/2;
+    bokehGroup.add(grp);
   }
+  bokehGroup.position.set(8,0,0);
+  bokehShape=shape;
+}
+buildBokeh('circle');
+
+// ================= controls =================
+const audio=$('bgm'),btn=$('play'),bar=$('bar'),prog=$('prog'),tlabel=$('time');
+function setPlaying(p){
+  playing=p;btn.textContent=p?'❚❚ 暂停 / Pause':'▶ 播放 / Play';
+  if(p){if(T>=DUR)T=0;audio.currentTime=T;audio.play().catch(()=>{});lastNow=null;}else audio.pause();
 }
 btn.onclick=()=>setPlaying(!playing);
-bar.onclick=ev=>{
-  const r=bar.getBoundingClientRect();
-  T=Math.max(0,Math.min(DUR,(ev.clientX-r.left)/r.width*DUR));
-  audio.currentTime=T;
-  render(T);
-};
+bar.onclick=ev=>{const r=bar.getBoundingClientRect();T=clamp((ev.clientX-r.left)/r.width)*DUR;audio.currentTime=T;render(T);};
 document.addEventListener('keydown',ev=>{if(ev.code==='Space'){ev.preventDefault();setPlaying(!playing);}});
-
 function loop(now){
   if(playing){
-    if(!audio.paused && audio.currentTime>0) T=audio.currentTime;
-    else if(lastNow!==null) T+=(now-lastNow)/1000;
+    if(!audio.paused&&audio.currentTime>0)T=audio.currentTime;else if(lastNow!==null)T+=(now-lastNow)/1000;
     if(T>=DUR){T=DUR;setPlaying(false);}
   }
-  lastNow=now;
-  render(T);
-  requestAnimationFrame(loop);
+  lastNow=now;render(T);requestAnimationFrame(loop);
 }
+window.__render=render;
+
+
+
 render(T);
-requestAnimationFrame(loop);
+window.__ready=true;
+if(!params.has('t')) requestAnimationFrame(loop);
 </script>
 </body>
 </html>
+

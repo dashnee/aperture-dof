@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>光圈 · 让"清楚"有了边界 · v5</title>
+<style>
+  :root{--paper:#f2ece1;--ink:#2a2723;--mute:#8a8176;--vermil:#b5482f}
+  html,body{margin:0;height:100%;background:#e4dccd;color:var(--ink);font-family:"Songti SC","Noto Serif SC","Source Han Serif SC","STSong","WenQuanYi Zen Hei",serif}
+  #stage{position:relative;width:min(100vw,calc((100vh - 96px)*16/9));aspect-ratio:16/9;margin:0 auto;background:var(--paper);overflow:hidden;box-shadow:0 12px 40px rgba(60,40,20,.14)}
+  canvas{position:absolute;inset:0;width:100%;height:100%}
+  #chap{position:absolute;left:6%;top:7%;font-size:clamp(11px,1.05vw,14px);letter-spacing:.32em;color:var(--vermil)}
+  #title{position:absolute;left:6%;top:11.5%;font-size:clamp(20px,2.7vw,38px);letter-spacing:.1em}
+  #read{position:absolute;right:5%;top:7%;text-align:right;font-size:clamp(14px,1.7vw,22px);letter-spacing:.06em}
+  #read small{display:block;font-size:.58em;color:var(--mute);letter-spacing:.12em}
+  #zh{position:absolute;left:6%;bottom:12%;width:88%;font-size:clamp(14px,1.7vw,23px);line-height:1.6}
+  #en{position:absolute;left:6%;bottom:4%;width:88%;font-size:clamp(11px,1.15vw,15px);font-style:italic;color:var(--mute);line-height:1.5}
+  #ctrl{display:flex;gap:14px;align-items:center;justify-content:center;flex-wrap:wrap;padding:12px;font-family:-apple-system,"PingFang SC","Noto Sans SC",sans-serif;font-size:14px;color:#4a443c}
+  button{background:#fbf8f1;border:1px solid #b9ae9d;border-radius:18px;padding:6px 16px;cursor:pointer;color:var(--ink);font-size:14px}
+  input[type=range]{width:min(40vw,360px);accent-color:#b5482f}
+  #bar{width:min(50vw,520px);height:3px;background:#cfc5b4;cursor:pointer}
+  #prog{height:100%;width:0;background:var(--vermil)}
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c" width="1280" height="720"></canvas>
+  <div id="chap"></div>
+  <div id="title"></div>
+  <div id="read"></div>
+  <div id="zh"></div>
+  <div id="en"></div>
+</div>
+<div id="ctrl">
+  <button id="play">▶ 播放</button>
+  <div id="bar"><div id="prog"></div></div>
+  <span id="time">0.0 / 90s</span>
+  <label>光圈 <input id="fs" type="range" min="0" max="1" step="0.001" value="0.3"> <span id="fv"></span></label>
+  <button id="auto">恢复自动</button>
+</div>
+<audio id="bgm" src="audio.m4a" preload="auto"></audio>
+
+<script>
+const $=id=>document.getElementById(id);
+const cv=$('c'),g=cv.getContext('2d');
+const W=1280,H=720,TAU=Math.PI*2;
+const PAPER='#f2ece1', INK='42,39,35', RV='181,72,47', RG='201,162,74', RS='125,154,148', RW='255,246,230';
+const clamp=(x,a=0,b=1)=>Math.min(b,Math.max(a,x));
+const lerp=(a,b,t)=>a+(b-a)*t;
+const sm=x=>{x=clamp(x);return x*x*(3-2*x)};
+const sm5=x=>{x=clamp(x);return x*x*x*(x*(x*6-15)+10)};
+function kf(keys,t,e=sm5){
+  if(t<=keys[0][0]) return keys[0][1];
+  for(let i=1;i<keys.length;i++) if(t<=keys[i][0]){const a=keys[i-1],b=keys[i];return lerp(a[1],b[1],e((t-a[0])/(b[0]-a[0])));}
+  return keys[keys.length-1][1];
+}
+const rgba=(c,a)=>`rgba(${c},${clamp(a)})`;
+const NFromS=s=>1.4*Math.pow(16/1.4,s), SFromN=N=>Math.log(N/1.4)/Math.log(16/1.4);
+
+// ---------- aperture model ----------
+// Lens semi-aperture A = f/(2N). Blades: n straight edges, inscribed radius ~ 1 (normalised).
+// Diffraction star: 2n spikes, aligned with the blade edges' normals (so spikes are perpendicular to edges).
+const BLADES=6;               // physical 6-blade iris (typical)
+const NSTAR={circle:0,5:5,6:6,8:8};
+
+// ---------- scene schedules (90 s) ----------
+// N (f-number) over time: opens wide, closes down, then rests
+const NAUTO=t=>kf([[0,1.8],[8,1.8],[14,11],[24,11],[26,1.4],[30,1.4],[34,8],[42,8],[46,2.8],[52,2.8],[56,16],[64,16],[68,1.6],[90,1.6]],t,sm);
+// stop-and-reveal: 0 = closed-ish for reveal, 1 = fully open
+const SWEEP=t=>kf([[0,0],[1,0]],t);
+
+// chapters
+const CH=[
+ {a:0,   b:6,  n:'01',title:'一个光点',zh:'黑暗里，一点光。它向四面八方发出光线。',en:'In the dark, a point of light. It sends rays in every direction.'},
+ {a:6,   b:14, n:'02',title:'镜头的门',zh:'镜头里有一扇会开合的门。它叫光圈。',en:'Inside the lens there is a door that opens and closes. It is called the aperture.'},
+ {a:14,  b:24, n:'03',title:'门的结构',zh:'门由数片金属叶片组成。叶片转动，中间的洞就随之变大或变小。',en:'The door is made of several metal blades. As they turn, the opening in the middle grows or shrinks.'},
+ {a:24,  b:34, n:'04',title:'侧面看门',zh:'从侧面看，门是一道薄薄的隔板，正好放在透镜的中心。',en:'From the side, the door is a thin plate, placed exactly on the lens axis.'},
+ {a:34,  b:46, n:'05',title:'门收窄，光减少',zh:'门收窄，穿过的光变少，但每一束光都更靠近中心，更接近“准”的方向。',en:'The door narrows: less light passes, and each ray sits closer to the centre, nearer the ideal path.'},
+ {a:46,  b:56, n:'06',title:'星芒与叶片',zh:'当光点足够亮，门的形状就显出来：叶片有几片，星芒就有几对。',en:'When the point is bright, the shape of the door shows. Each blade pair draws a spike.'},
+ {a:56,  b:68, n:'07',title:'焦外的形状',zh:'焦外的光斑，也是门的形状。圆门给圆斑，六片叶给六边形。',en:'Out-of-focus highlights take the shape of the door. A round door gives round discs; six blades give hexagons.'},
+ {a:68,  b:84, n:'08',title:'同一扇门，两种生活',zh:'光圈大，背景是柔软的光斑；光圈小，背景清楚。你想让哪一部分留在清晰里？',en:'Wide: soft highlights behind. Narrow: a clear background. What part of your life do you want to keep in focus?'},
+ {a:84,  b:90, n:'09',title:'回到那一点光',zh:'一点光，又回到黑暗里。',en:'One point of light, back to the dark.'},
+];
+let curCh=-1;
+function updateText(t){
+  let idx=CH.findIndex(c=>t>=c.a&&t<c.b); if(idx<0) idx=CH.length-1;
+  if(idx!==curCh){curCh=idx;const c=CH[idx];
+    $('chap').textContent=c.n+' / 09';$('title').textContent=c.title;$('zh').textContent=c.zh;$('en').textContent=c.en;}
+  const dk=darkness(t);
+  const fg=dk>0.5?'#ece4d4':'#2a2723';
+  const dkStar=(t>=46&&t<56);
+  const fg2=(dk>0.5||dkStar)?'#ece4d4':'#2a2723';
+  for(const id of ['title','zh','read']) $(id).style.color=fg2;
+  $('en').style.color=(dk>0.5||dkStar)?'#a79d8d':'#8a8176';
+  $('chap').style.color=dk>0.5?'#d9926f':'#b5482f';
+}
+function darkness(t){ return Math.max(1-sm((t-3.2)/1.8), sm((t-83.2)/1.2)); }
+
+// ---------- primitives ----------
+function ln(x1,y1,x2,y2,c,w,a){g.strokeStyle=rgba(c,a);g.lineWidth=w;g.beginPath();g.moveTo(x1,y1);g.lineTo(x2,y2);g.stroke();}
+function halo(x,y,r,c,a){const gr=g.createRadialGradient(x,y,0,x,y,r);gr.addColorStop(0,rgba(c,a));gr.addColorStop(0.35,rgba(c,a*0.35));gr.addColorStop(1,rgba(c,0));g.fillStyle=gr;g.beginPath();g.arc(x,y,r,0,TAU);g.fill();}
+function txt(s,x,y,px,c,a,align='left'){g.save();g.globalAlpha=clamp(a);g.fillStyle=`rgb(${c})`;g.font=`${px}px "Songti SC","Noto Serif SC","STSong",serif`;g.textAlign=align;g.fillText(s,x,y);g.restore();}
+
+// ---------- 2D view of blades (face-on, for chapter 3) ----------
+// Each blade is a straight edge tangent-ish to the opening circle; rotating the set changes the hole.
+// Geometry: n blades, hole radius r. Blade i rotated by angle phi_i. A blade is a tangent-like edge
+// whose distance from centre = d(r). Hole is the inner polygon between blade edges.
+function bladeEdgeDist(r,n){ return Math.max(r, 0.001); }
+function drawBladeSet(cx,cy,R,n,holeR,rotA,c,a){
+  // draw the blades as thick arcs with a thin outline; blade edge distance from centre = holeR (inner) to R (outer)
+  const step=TAU/n;
+  for(let i=0;i<n;i++){
+    const a0=rotA+i*step;
+    // blade as a rotated trapezoid: inner edge at holeR, outer at R
+    const span=step*0.92;
+    g.beginPath();
+    const p=(rad,ang)=>[cx+rad*Math.cos(ang),cy+rad*Math.sin(ang)];
+    const q1=p(holeR,a0),q2=p(R,a0),q3=p(R,a0+span),q4=p(holeR,a0+span*0.25);
+    g.moveTo(q1[0],q1[1]);g.lineTo(q2[0],q2[1]);g.lineTo(q3[0],q3[1]);g.lineTo(q4[0],q4[1]);g.closePath();
+    g.fillStyle=rgba(c,a);g.fill();
+    g.strokeStyle=rgba(INK,a*0.8);g.lineWidth=1.2;g.stroke();
+  }
+}
+// hole polygon from blades: the aperture outline is the inner envelope of n straight edges
+function holeOutline(cx,cy,holeR,n,rotA,steps=180){
+  const pts=[];
+  for(let k=0;k<steps;k++){
+    const ang=k/steps*TAU;
+    // radius of the polygon with inradius holeR and n sides, at angle ang
+    const seg=TAU/n;
+    const aa=((ang-rotA)%seg+seg)%seg-seg/2;
+    const rr=holeR*Math.cos(Math.PI/n)/Math.cos(aa);
+    pts.push([cx+rr*Math.cos(ang),cy+rr*Math.sin(ang)]);
+  }
+  return pts;
+}
+
+// ---------- chapter 3: near, face-on view of the blades ----------
+function drawCloseUpBlades(N,a,t){
+  // oblique perspective: draw in a local frame then squash vertically (tilt) and add a plate thickness
+  const cx=640,cy=380,R=250;
+  g.save();g.globalAlpha=clamp(a);
+  g.translate(cx,cy);g.transform(1,0,0,0.62,0,0);g.translate(-cx,-cy);
+  drawCloseUpFace(N,a,t,cx,cy,R);
+  g.restore();
+  // the iris "plate" rim: a thin ellipse edge under the blades, gives depth
+  g.save();g.globalAlpha=clamp(a)*0.9;g.strokeStyle=rgba(INK,0.9);g.lineWidth=3;
+  g.beginPath();g.ellipse(cx,cy+12,R+18,(R+18)*0.62,0,0,Math.PI);g.stroke();g.restore();
+}
+function drawCloseUpFace(N,a,t,cx,cy,R){
+  // holeR (in px) = semi-aperture scaled, bounded so the structure is always visible
+  const A=clamp(0.8/N*1.0,0.08,1.0);   // 0..1 in units of R
+  const holeR=A*R*0.95;
+  const rot=t*0.09;
+  // background disc (paper rim)
+  g.save();g.globalAlpha=clamp(a);
+  g.fillStyle='rgba(42,39,35,0.92)';g.beginPath();g.arc(cx,cy,R+18,0,TAU);g.fill();
+  // blades
+  drawBladeSet(cx,cy,R,BLADES,holeR,rot,'242,236,225',0.92);
+  // hole outline in vermilion
+  const pts=holeOutline(cx,cy,holeR,BLADES,rot);
+  g.beginPath();pts.forEach((p,i)=>i?g.lineTo(p[0],p[1]):g.moveTo(p[0],p[1]));g.closePath();
+  g.strokeStyle=rgba(RV,0.95);g.lineWidth=2;g.stroke();
+  // pivot pins
+  for(let i=0;i<BLADES;i++){const an=rot+i*TAU/BLADES+0.25*TAU/BLADES;const px=cx+R*0.9*Math.cos(an),py=cy+R*0.9*Math.sin(an);
+    g.fillStyle=rgba(INK,0.9);g.beginPath();g.arc(px,py,4,0,TAU);g.fill();}
+  g.restore();
+}
+function labelsIris(a){
+  txt('叶片 · blades',900,200,17,INK,0.7*a,'left');
+  txt('中心孔 · opening',900,228,17,INK,0.7*a,'left');
+}
+
+// ---------- chapter 4: side view (thin plate on axis) ----------
+function drawSideView(N,a,t){
+  const x0=420,y0=360;   // optical axis horizontal
+  const A=clamp(0.8/N,0.08,1.0)*190;   // semi-aperture px
+  g.save();g.globalAlpha=clamp(a);
+  // the plate: a vertical slab with a hole of half-height A
+  g.fillStyle='rgba(42,39,35,0.9)';
+  g.fillRect(x0-6,y0-290,12,290-A);
+  g.fillRect(x0-6,y0+A,12,290-A);
+  // axis
+  ln(60,y0,1220,y0,INK,0.8,0.35);
+  // rays converge through the hole, illustrating why a smaller hole keeps the cone narrow
+  for(let k=-4;k<=4;k++){
+    const yy=k/4*A*0.98;
+    ln(x0-420,y0-(k/4)*(A*0.1)-( -k*0.0),x0,y0+yy,RG,1,0.4);
+    ln(x0,y0+yy,x0+420,y0+yy*0.25,RG,1,0.4);
+  }
+  txt('隔板 · the plate',x0+40,y0+330,15,INK,0.7);
+  txt('中心 · on the axis',x0+40,y0+352,15,INK,0.7);
+  g.restore();
+}
+
+// ---------- chapter 5/6: the point source seen through the door, rays converge ----------
+function drawStarPoint(N,a,t,sides){
+  const cx=640,cy=360;
+  const A=clamp(0.8/N,0.08,1.0);
+  const spikeN=sides;   // 2 x blades spikes
+  const rot=t*0.07;
+  // star: 2n spikes, aligned perpendicular to the blade edges
+  g.save();g.globalCompositeOperation='lighter';
+  for(let k=0;k<2*spikeN;k++){
+    const ang=rot+k*Math.PI/spikeN;
+    const len=150+ 110*A;
+    const gr=g.createLinearGradient(cx,cy,cx+Math.cos(ang)*len,cy+Math.sin(ang)*len);
+    gr.addColorStop(0,rgba(RW,0.95*a));gr.addColorStop(0.5,rgba(RW,0.35*a));gr.addColorStop(1,rgba(RW,0));
+    g.strokeStyle=gr;g.lineWidth=1.8;
+    g.beginPath();g.moveTo(cx,cy);g.lineTo(cx+Math.cos(ang)*len,cy+Math.sin(ang)*len);g.stroke();
+  }
+  halo(cx,cy,30,RW,0.95*a);
+  g.restore();
+}
+
+// ---------- chapter 7: bokeh discs shape by blades (in a frame) ----------
+function drawBokehShape(N,a,t,sides,x0,y0,w,h){
+  g.save();g.globalAlpha=clamp(a);
+  g.fillStyle='#14120e';g.fillRect(x0,y0,w,h);
+  g.beginPath();g.rect(x0,y0,w,h);g.clip();
+  g.globalCompositeOperation='lighter';
+  let sd=7;const r=()=>(sd=(sd*16807)%2147483647)/2147483647;
+  const sizeBase=clamp(1.2/N,0.25,2.2)*34;
+  for(let i=0;i<46;i++){
+    const x=x0+12+r()*(w-24), y=y0+12+r()*(h-24), rr=sizeBase*(0.6+r()*0.9);
+    const c=i%3===0?'255,205,140':i%3===1?'255,236,205':'240,160,110';
+    g.fillStyle=rgba(c,0.30);
+    if(sides){
+      g.beginPath();for(let k=0;k<sides;k++){const an=k/sides*TAU+Math.PI/6;const px=x+rr*Math.cos(an),py=y+rr*Math.sin(an);k?g.lineTo(px,py):g.moveTo(px,py);}g.closePath();g.fill();
+    } else { g.beginPath();g.arc(x,y,rr,0,TAU);g.fill(); }
+  }
+  g.globalCompositeOperation='source-over';g.restore();
+  g.save();g.globalAlpha=clamp(a);g.strokeStyle='rgba(242,236,225,0.5)';g.lineWidth=1;g.strokeRect(x0,y0,w,h);g.restore();
+}
+
+// ---------- main render(t,N) ----------
+function render(t,N){
+  g.setTransform(1,0,0,1,0,0);
+  g.globalCompositeOperation='source-over';g.globalAlpha=1;
+  g.fillStyle=PAPER;g.fillRect(0,0,W,H);
+  const dk=darkness(t);
+  if(dk>0){g.globalAlpha=1;g.fillStyle=`rgb(${Math.round(242*(1-dk)+18*dk)},${Math.round(236*(1-dk)+15*dk)},${Math.round(225*(1-dk)+12*dk)})`;g.fillRect(0,0,W,H);}
+
+  // ch1: single point of light
+  if(t<6){
+    const k=sm5(t/1.2)*(1-sm((t-5)/1.0));
+    g.save();g.globalCompositeOperation='lighter';
+    halo(W/2,H/2,240,RG,0.35*k);
+    halo(W/2,H/2,28,RW,0.95*k);
+    g.restore();
+  }
+
+  // ch2: the door appears as a macro of the 6-blade iris, face-on, slow dolly-in
+  const a2=sm((t-6)/1.2)*(1-sm((t-14)/0.6));
+  if(a2>0.001){
+    const zoom=1+0.05*(t-6);
+    g.save();g.translate(640,360);g.scale(zoom,zoom);g.translate(-640,-360);
+    drawCloseUpBlades(N,a2,t);
+    g.restore();
+  }
+
+  // ch3: close-up of blades, the iris is opening and closing
+  const a3=sm((t-14)/1.0)*(1-sm((t-24)/0.8));
+  if(a3>0.001){ drawCloseUpBlades(N,a3,t); labelsIris(a3); }
+
+  // ch4: side view (thin plate on axis), slow pan along the axis
+  const a4=sm((t-24)/1.0)*(1-sm((t-34)/0.8));
+  if(a4>0.001) drawSideView(N,a4,t);
+
+  // ch5: narrow door, rays converge closer to centre (side view, rays shown tighter)
+  const a5=sm((t-34)/1.0)*(1-sm((t-46)/0.8));
+  if(a5>0.001) drawSideView(N,a5,t);
+
+  // ch6: bright point seen through the door: spikes = 2 x blades
+  const a6=sm((t-46)/1.0)*(1-sm((t-56)/0.8));
+  if(a6>0.001){ g.save();g.globalAlpha=a6;g.fillStyle='#120f0c';g.fillRect(0,0,W,H);g.restore(); drawStarPoint(N,a6,t,BLADES);
+    txt('2n 条星芒 · 6 叶 → 12 条',640,640,18,RW,0.8*a6,'center'); }
+
+  // ch7: bokeh shape from blades (hexagon) vs circle
+  const a7=sm((t-56)/1.0)*(1-sm((t-68)/0.8));
+  if(a7>0.001) drawBokehShape(N,a7,t,BLADES,80,200,500,260);
+  if(a7>0.001) drawBokehShape(N,a7,t,0,700,200,500,260);
+  if(a7>0.001){txt('6 叶 · 六边形',90,494,17,INK,0.75*a7);txt('圆形光圈 · 圆斑',730,494,17,INK,0.75*a7);}
+
+  // ch8: depth of field summary (two photos, subject crisp)
+  const a8=sm((t-68)/1.0)*(1-sm((t-84)/0.8));
+  if(a8>0.001){
+    drawBokehShape(N,a8,t,0,80,200,500,260);
+    drawBokehShape(N,a8,t,BLADES,700,200,500,260);
+  }
+
+  // ch9: echo — back to the single point
+  if(t>=84){
+    const k=sm5((t-84)/2);
+    g.save();g.globalCompositeOperation='lighter';
+    halo(W/2,H/2,240,RG,0.35*k);halo(W/2,H/2,28,RW,0.95*k);g.restore();
+  }
+
+  // readout
+  const rd=$('read');
+  if(t>=14 && t<56) rd.innerHTML='f/'+N.toFixed(1)+'<small>光圈 · aperture</small>';
+  else rd.innerHTML='';
+}
+
+// ---------- controls and clock ----------
+const audio=$('bgm'),btn=$('play'),bar=$('bar'),prog=$('prog'),tlabel=$('time'),fs=$('fs'),fv=$('fv');
+const DUR=90;
+const qp=new URLSearchParams(location.search);
+let T=+(qp.get('t')||0), playing=false, lastNow=null, manual=null;
+if(qp.has('N')) manual=+qp.get('N');
+function Ncur(t){return manual!==null?manual:NAUTO(t);}
+function frame(t){
+  T=t;const N=Ncur(t);
+  if(manual===null) fs.value=SFromN(N);
+  fv.textContent='f/'+N.toFixed(1);
+  render(t,N);updateText(t);
+  prog.style.width=(t/DUR*100)+'%';tlabel.textContent=t.toFixed(1)+' / 90s';
+}
+fs.addEventListener('input',()=>{manual=NFromS(+fs.value);});
+$('auto').onclick=()=>{manual=null;};
+function setPlaying(p){
+  playing=p;btn.textContent=p?'❚❚ 暂停':'▶ 播放';
+  if(p){if(T>=DUR)T=0;audio.currentTime=T;audio.play().catch(()=>{});lastNow=null;}else audio.pause();
+}
+btn.onclick=()=>setPlaying(!playing);
+bar.onclick=ev=>{const r=bar.getBoundingClientRect();T=clamp((ev.clientX-r.left)/r.width)*DUR;audio.currentTime=T;frame(T);};
+document.addEventListener('keydown',ev=>{if(ev.code==='Space'&&ev.target.tagName!=='INPUT'){ev.preventDefault();setPlaying(!playing);}});
+function loop(now){
+  if(playing){
+    if(!audio.paused&&audio.currentTime>0)T=audio.currentTime;else if(lastNow!==null)T+=(now-lastNow)/1000;
+    if(T>=DUR){T=DUR;setPlaying(false);}
+  }
+  lastNow=now;frame(T);requestAnimationFrame(loop);
+}
+frame(T);
+if(!qp.has('still')) requestAnimationFrame(loop);
+</script>
+</body>
+</html>

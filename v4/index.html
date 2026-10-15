@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>光圈 · 让"清楚"有了边界</title>
+<style>
+  :root{--paper:#f2ece1;--ink:#2a2723;--mute:#8a8176;--vermil:#b5482f}
+  html,body{margin:0;height:100%;background:#e4dccd;color:var(--ink);font-family:"Songti SC","Noto Serif SC","Source Han Serif SC","STSong","WenQuanYi Zen Hei",serif}
+  #stage{position:relative;width:min(100vw,calc((100vh - 96px)*16/9));aspect-ratio:16/9;margin:0 auto;background:var(--paper);overflow:hidden;box-shadow:0 12px 40px rgba(60,40,20,.14)}
+  canvas{position:absolute;inset:0;width:100%;height:100%}
+  #chap{position:absolute;left:6%;top:7%;font-size:clamp(11px,1.05vw,14px);letter-spacing:.32em;color:var(--vermil)}
+  #title{position:absolute;left:6%;top:11.5%;font-size:clamp(20px,2.7vw,38px);letter-spacing:.1em}
+  #read{position:absolute;right:5%;top:7%;text-align:right;font-size:clamp(14px,1.7vw,22px);letter-spacing:.06em}
+  #read small{display:block;font-size:.58em;color:var(--mute);letter-spacing:.12em}
+  #zh{position:absolute;left:6%;bottom:12%;width:88%;font-size:clamp(14px,1.7vw,23px);line-height:1.6}
+  #en{position:absolute;left:6%;bottom:4%;width:88%;font-size:clamp(11px,1.15vw,15px);font-style:italic;color:var(--mute);line-height:1.5}
+  #ctrl{display:flex;gap:14px;align-items:center;justify-content:center;flex-wrap:wrap;padding:12px;font-family:-apple-system,"PingFang SC","Noto Sans SC",sans-serif;font-size:14px;color:#4a443c}
+  button{background:#fbf8f1;border:1px solid #b9ae9d;border-radius:18px;padding:6px 16px;cursor:pointer;color:var(--ink);font-size:14px}
+  input[type=range]{width:min(40vw,360px);accent-color:#b5482f}
+  #bar{width:min(50vw,520px);height:3px;background:#cfc5b4;cursor:pointer}
+  #prog{height:100%;width:0;background:var(--vermil)}
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="c" width="1280" height="720"></canvas>
+  <div id="chap"></div>
+  <div id="title"></div>
+  <div id="read"></div>
+  <div id="zh"></div>
+  <div id="en"></div>
+</div>
+<div id="ctrl">
+  <button id="play">▶ 播放</button>
+  <div id="bar"><div id="prog"></div></div>
+  <span id="time">0.0 / 60s</span>
+  <label>光圈 <input id="fs" type="range" min="0" max="1" step="0.001" value="0.3"> <span id="fv"></span></label>
+  <button id="auto">恢复自动</button>
+</div>
+<audio id="bgm" src="audio.m4a" preload="auto"></audio>
+
+<script>
+const $=id=>document.getElementById(id);
+const cv=$('c'),g=cv.getContext('2d');
+const W=1280,H=720,OX=600,OY=318,SC=100;
+const X=x=>OX+x*SC, Y=y=>OY+y*SC;
+const F=1, TAU=Math.PI*2;
+const PAPER='#f2ece1', INK='42,39,35', RV='181,72,47', RG='201,162,74', RS='125,154,148', RW='255,246,230';
+const clamp=(x,a=0,b=1)=>Math.min(b,Math.max(a,x));
+const lerp=(a,b,t)=>a+(b-a)*t;
+const sm=x=>{x=clamp(x);return x*x*(3-2*x)};
+const sm5=x=>{x=clamp(x);return x*x*x*(x*(x*6-15)+10)};
+function kf(keys,t,e=sm5){
+  if(t<=keys[0][0]) return keys[0][1];
+  for(let i=1;i<keys.length;i++) if(t<=keys[i][0]){const a=keys[i-1],b=keys[i];return lerp(a[1],b[1],e((t-a[0])/(b[0]-a[0])));}
+  return keys[keys.length-1][1];
+}
+const rng=(s=>()=>(s=(s*16807)%2147483647)/2147483647)(42);
+// thin-lens model (f = 1 unit). Aperture N -> semi-aperture A = f/(2N)
+const Aof=N=>F/(2*N);
+const vOf=u=>1/(1/F-1/u);
+const NFromS=s=>1.4*Math.pow(16/1.4,s), SFromN=N=>Math.log(N/1.4)/Math.log(16/1.4);
+
+// ---------- schedules ----------
+const NAUTO=t=>kf([[0,2],[20,2],[21.6,8],[27,8],[28,1.4],[32,16],[38,16],[38.6,1.4],[41.5,16],[44,1.4],[47,8],[60,8]],t,sm);
+const XSAUTO=t=>kf([[0,1.5],[13,1.5],[14.4,1.5],[15.8,2.3],[17.8,2.3],[19,1.5],[60,1.5]],t,sm5);
+
+// ---------- chapters ----------
+const CH=[
+ {a:0,b:5,n:'01',title:'一个光点',zh:'黑暗里，一个光点向四面八方发出光。',en:'In the dark, a point of light sends light in every direction.'},
+ {a:5,b:13,n:'02',title:'透镜，把光收拢',zh:'透镜把这些光重新折向同一处，汇聚成一个点。这个点，就是它的像。',en:'A lens bends the light back together into one point. That point is its image.'},
+ {a:13,b:20,n:'03',title:'对准与没对准',zh:'感光元件放在汇聚处，点就清楚；稍稍离开，点就变成一个圆斑。这叫弥散圆。',en:'Sensor at the convergence: a sharp point. Move it away: the point becomes a disc, the circle of confusion.'},
+ {a:20,b:28,n:'04',title:'光圈：一扇会开合的门',zh:'光圈是镜头里的一扇门。门开得大，进光多；收得小，只留下中心的光。',en:'The aperture is a door inside the lens. Open wide, more light; close down, only the central rays pass.'},
+ {a:28,b:38,n:'05',title:'门越小，圆越小',zh:'门收小，同一个光点就缩成更小的圆，看上去也就更清楚。',en:'Close the door and the same point shrinks to a smaller disc, which looks sharper.'},
+ {a:38,b:47,n:'06',title:'景深：清楚的范围',zh:'近、中、远三个物体，只有中间那个恰好在对准的距离上。门越小，清楚的前后范围越宽，这就是景深。',en:'Near, middle, far: only the middle one sits at the focus distance. A smaller door widens the range that looks sharp. That range is depth of field.'},
+ {a:47,b:54,n:'07',title:'同一个场景，两种门',zh:'同一个人，同一片灯光。大光圈：背景是大大的光斑，人被托出来。小光圈：背景清楚，故事也随之改变。',en:'Same person, same lights. Wide aperture: big soft discs, the person stands out. Small aperture: the background is readable, and the story changes.'},
+ {a:54,b:60,n:'08',title:'回到那一个点',zh:'你想让生活的哪一部分，停留在清晰里？',en:'What part of your life do you want to keep in focus?'},
+];
+let curCh=-1;
+function updateText(t){
+  let idx=CH.findIndex(c=>t>=c.a&&t<c.b); if(idx<0) idx=CH.length-1;
+  if(idx!==curCh){curCh=idx;const c=CH[idx];
+    $('chap').textContent=c.n+' / 08';$('title').textContent=c.title;$('zh').textContent=c.zh;$('en').textContent=c.en;}
+  const dk=Math.max(1-sm((t-3.2)/1.8),sm((t-53.4)/1.1));
+  const fg=dk>0.5?'#ece4d4':'#2a2723';
+  for(const id of ['title','zh']) $(id).style.color=fg;
+  $('en').style.color=dk>0.5?'#a79d8d':'#8a8176';
+  $('chap').style.color=dk>0.5?'#d9926f':'#b5482f';
+  $('read').style.color=fg;
+}
+
+// ---------- primitives ----------
+const rgba=(c,a)=>`rgba(${c},${clamp(a)})`;
+function ln(x1,y1,x2,y2,c,w,a){g.strokeStyle=rgba(c,a);g.lineWidth=w;g.beginPath();g.moveTo(x1,y1);g.lineTo(x2,y2);g.stroke();}
+function halo(x,y,r,c,a){const gr=g.createRadialGradient(x,y,0,x,y,r);gr.addColorStop(0,rgba(c,a));gr.addColorStop(0.35,rgba(c,a*0.35));gr.addColorStop(1,rgba(c,0));g.fillStyle=gr;g.beginPath();g.arc(x,y,r,0,TAU);g.fill();}
+function discFill(x,y,r,c,a){ if(r<0.8){halo(x,y,4,c,a);return;} g.fillStyle=rgba(c,a);g.beginPath();g.arc(x,y,r,0,TAU);g.fill(); }
+function polyFill(x,y,r,c,a,sides){ if(r<0.8){halo(x,y,4,c,a);return;} g.fillStyle=rgba(c,a);g.beginPath();for(let i=0;i<sides;i++){const an=i/sides*TAU+Math.PI/6;const px=x+r*Math.cos(an),py=y+r*Math.sin(an);i?g.lineTo(px,py):g.moveTo(px,py);}g.closePath();g.fill(); }
+function txt(s,x,y,px,c,a,align='left'){g.save();g.globalAlpha=clamp(a);g.fillStyle=`rgb(${c})`;g.font=`${px}px "Songti SC","Noto Serif SC","STSong",serif`;g.textAlign=align;g.fillText(s,x,y);g.restore();}
+
+// ---------- optics pieces ----------
+function lensDraw(){
+  g.beginPath();g.moveTo(X(0),Y(-1.55));g.quadraticCurveTo(X(-0.28),Y(0),X(0),Y(1.55));g.quadraticCurveTo(X(0.28),Y(0),X(0),Y(-1.55));
+  g.fillStyle='rgba(125,154,148,0.16)';g.fill();g.strokeStyle=rgba('125,154,148',0.95);g.lineWidth=1.6;g.stroke();
+}
+function stopDraw(A){
+  ln(X(0),Y(-1.9),X(0),Y(-A),INK,5,0.8);ln(X(0),Y(A),X(0),Y(1.9),INK,5,0.8);
+}
+function sensorDraw(xs){
+  ln(X(xs),Y(-1.85),X(xs),Y(1.85),INK,1.6,0.75);
+  txt('感光元件',X(xs)+8,Y(1.85)+2,13,INK,0.55);
+}
+// one point source at distance u, height h. Rays go through lens samples on the aperture, refract to image, land on sensor at xs.
+function bundle(u,h,A,xs,prog,c,nr,phase,labelImg){
+  const v=vOf(u), Sx=-u, Sy=h, Iy=-h*v/u;
+  const pr=clamp(prog);
+  if(pr<=0) return;
+  for(let k=0;k<nr;k++){
+    const ey=-A+2*A*(k+0.5)/nr;
+    const slope=(Iy-ey)/v, yS=ey+slope*xs;
+    const ix=lerp(Sx,0,pr), iy=lerp(Sy,ey,pr);
+    ln(X(Sx),Y(Sy),X(ix),Y(iy),c,1.1,0.42);
+    if(pr>0.5){const q=clamp((pr-0.5)*2);ln(X(0),Y(ey),X(lerp(0,xs,q)),Y(lerp(ey,yS,q)),c,1.1,0.55);}
+    if(pr>0.99){
+      const s=(phase+k/nr)%1;let px,py;
+      if(s<0.5){const q=s*2;px=lerp(Sx,0,q);py=lerp(Sy,ey,q);}
+      else{const q=(s-0.5)*2;px=lerp(0,xs,q);py=lerp(ey,yS,q);}
+      halo(X(px),Y(py),5,c,0.9);
+    }
+  }
+  const cy=-h*xs/u, r=A*Math.abs(xs-v)/v;
+  if(pr>0.99) discFill(X(xs),Y(cy),r*SC,c,0.5);
+  // source dot
+  halo(X(Sx),Y(Sy),22,c,0.7); g.fillStyle=rgba(c,1);g.beginPath();g.arc(X(Sx),Y(Sy),3.6,0,TAU);g.fill();
+  if(labelImg && pr>0.99 && r<0.02) txt('像 · image',X(v)+6,Y(0)-14,14,INK,0.6);
+}
+
+// viewfinder (dark box, bokeh of three depths)
+const VFL=[...Array(18)].map((_,i)=>({x:rng(),y:rng(),u:[1.6,3,5][i%3],c:[RV,RG,RS][i%3]}));
+function viewfinder(N,xs,a){
+  const x0=880,y0=96,w=330,h=196;
+  g.save();g.globalAlpha=clamp(a);
+  g.fillStyle='#14120e';g.fillRect(x0,y0,w,h);
+  g.beginPath();g.rect(x0,y0,w,h);g.clip();
+  g.globalCompositeOperation='lighter';
+  for(const L of VFL){const v=vOf(L.u);const r=Aof(N)*Math.abs(xs-v)/v*200;
+    const x=x0+10+L.x*(w-20),y=y0+10+L.y*(h-20);discFill(x,y,r,L.c,0.8);}
+  g.globalCompositeOperation='source-over';
+  g.restore();
+  g.save();g.globalAlpha=clamp(a);g.strokeStyle='rgba(242,236,225,0.5)';g.lineWidth=1;g.strokeRect(x0,y0,w,h);g.restore();
+  txt('取景器 · viewfinder',x0,y0+h+20,14,INK,0.6*a);
+}
+
+// photo panel for chapter 7
+function photo(x0,y0,w,h,N,seed,sides,a){
+  g.save();g.globalAlpha=clamp(a);
+  g.fillStyle='#14120e';g.fillRect(x0,y0,w,h);
+  g.beginPath();g.rect(x0,y0,w,h);g.clip();
+  g.fillStyle='#14120e';g.fillRect(x0,y0,w,h);
+  let sd=seed*7919+13;const r0=()=>(sd=(sd*16807)%2147483647)/2147483647;
+  g.globalCompositeOperation='lighter';
+  for(let i=0;i<72;i++){
+    const u=[1.6,2.2,3,4.5,6][Math.floor(r0()*5)];
+    const v=vOf(u);
+    const rr=Math.max(0.6,Math.min(46,(1/(2*N))*Math.abs(1.5-v)/v*900));
+    const x=x0+r0()*w, y=y0+r0()*h*0.92;
+    const c=['255,190,110','255,236,205','240,150,100'][i%3];
+    if(sides) polyFill(x,y,rr,c,0.38,sides); else discFill(x,y,rr,c,0.32);
+  }
+  g.globalCompositeOperation='source-over';
+  // in-focus subject: crisp silhouette with a warm rim
+  const cx=x0+w*0.5, hr=h*0.12, hy=y0+h*0.40;
+  g.fillStyle='rgba(20,16,12,0.92)';
+  g.beginPath();g.ellipse(cx,y0+h*1.02,w*0.14,h*0.36,0,Math.PI,0);g.fill();
+  g.beginPath();g.arc(cx,hy,hr,0,TAU);g.fill();
+  g.strokeStyle='rgba(255,200,140,0.45)';g.lineWidth=1.3;g.beginPath();g.arc(cx,hy,hr,-2.2,-0.4);g.stroke();
+  g.restore();
+}
+
+// ---------- background point (chapter 1 and the echo) ----------
+function pointLight(px,py,k,prog){
+  g.save();g.globalCompositeOperation='lighter';
+  for(let i=0;i<22;i++){
+    const an=i/22*TAU+0.3, L=(90+(i%4)*40)*prog;
+    ln(px,py,px+Math.cos(an)*L,py+Math.sin(an)*L,RG,1,0.22*k);
+  }
+  halo(px,py,170,RG,0.55*k);
+  halo(px,py,46,RW,0.9*k);
+  g.restore();
+}
+
+// ---------- main render(t) ----------
+function render(t,N){
+  const A=Aof(N), xs=XSAUTO(t);
+  // paper base, with a dark ink veil for the opening and the echo
+  g.globalCompositeOperation='source-over';g.globalAlpha=1;
+  g.fillStyle=PAPER;g.fillRect(0,0,W,H);
+  const dark=Math.max(1-sm((t-3.2)/1.8), sm((t-53.4)/1.1));
+  if(dark>0){g.globalAlpha=dark;g.fillStyle='#120f0c';g.fillRect(0,0,W,H);g.globalAlpha=1;}
+
+  // chapter 1 and 8: a single point of light
+  if(t<5){
+    pointLight(X(-3),OY,sm5(t/1.8)*(1-sm((t-4.4)/0.8)*0),sm5(t/3.2));
+  }
+  if(t>=54){
+    const px=lerp(X(-3),OX,sm5((t-54)/4));
+    pointLight(px,OY,sm5((t-54)/2),1);
+  }
+
+  // optics: chapters 2 to 7
+  const oa=sm((t-4.6)/0.9)*(1-sm((t-46.9)/0.6));
+  if(oa>0.001){
+    g.save();g.globalAlpha=oa;
+    ln(0,OY,W,OY,INK,0.6,0.1);
+    lensDraw();
+    const sA=sm((t-19.6)/1.0)*(1-sm((t-46.9)/0.6));
+    if(sA>0.001){g.save();g.globalAlpha=sA;stopDraw(A);g.restore();}
+    sensorDraw(xs);
+    const mainProg=sm5((t-6)/3.2);
+    bundle(3,0,A,xs,mainProg,RV,9,(t*0.12)%1,true);
+    if(t>=37.2){
+      const p2=sm5((t-37.4)/1.6)*(1-sm((t-46.6)/0.5));
+      bundle(1.6,0.6,A,xs,p2,RG,6,(t*0.12)%1,false);
+      bundle(5,-0.45,A,xs,p2,RS,6,(t*0.12+0.4)%1,false);
+      txt('近',X(-1.6)-6,Y(0.6)-22,14,INK,0.7*p2,'center');
+      txt('中',X(-3)-6,Y(0)-22,14,INK,0.7*mainProg,'center');
+      txt('远',X(-5)-6,Y(-0.45)-22,14,INK,0.7*p2,'center');
+    }
+    // labels
+    txt('光源 · source',X(-3),Y(0)+36,14,INK,0.6*mainProg,'center');
+    txt('透镜 · lens',X(0)+38,Y(1.45),14,INK,0.6*oa,'left');
+    g.restore();
+    if(sA>0.001 && t>=19.6) txt('光圈 · aperture',X(0)+38,Y(-1.75),14,INK,0.6*sA,'left');
+  }
+  // viewfinder in chapter 5
+  const va=sm((t-27.6)/0.8)*(1-sm((t-37.6)/0.8));
+  if(va>0.001) viewfinder(N,1.5,va);
+
+  // chapter 7: two photographs
+  const pa=sm((t-47.4)/0.8)*(1-sm((t-53.6)/0.6));
+  if(pa>0.001){
+    photo(90,200,460,260,1.8,11,0,pa);
+    photo(730,200,460,260,11,23,6,pa);
+    txt('f/1.8　大光圈 · 背景是大光斑',90,494,17,INK,0.75*pa);
+    txt('f/11　小光圈 · 背景清楚 · 光斑是六边形',730,494,17,INK,0.75*pa);
+  }
+
+  // HUD readout
+  const rd=$('read');
+  if(t>=20 && t<47) rd.innerHTML='f/'+N.toFixed(1)+'<small>光圈 · aperture</small>';
+  else rd.innerHTML='';
+}
+
+// ---------- controls and clock ----------
+const audio=$('bgm'),btn=$('play'),bar=$('bar'),prog=$('prog'),tlabel=$('time'),fs=$('fs'),fv=$('fv');
+const DUR=60;
+let T=+(new URLSearchParams(location.search).get('t')||0), playing=false, lastNow=null, manual=null;
+const qp=new URLSearchParams(location.search);
+if(qp.has('N')) manual=+qp.get('N');
+function Ncur(t){ return manual!==null?manual:NAUTO(t); }
+function frame(t){
+  T=t; const N=Ncur(t);
+  if(manual===null) fs.value=SFromN(N);
+  fv.textContent='f/'+N.toFixed(1);
+  render(t,N); updateText(t);
+  prog.style.width=(t/DUR*100)+'%'; tlabel.textContent=t.toFixed(1)+' / 60s';
+}
+fs.addEventListener('input',()=>{manual=NFromS(+fs.value);});
+$('auto').onclick=()=>{manual=null;};
+function setPlaying(p){
+  playing=p;btn.textContent=p?'❚❚ 暂停':'▶ 播放';
+  if(p){if(T>=DUR)T=0;audio.currentTime=T;audio.play().catch(()=>{});lastNow=null;}else audio.pause();
+}
+btn.onclick=()=>setPlaying(!playing);
+bar.onclick=ev=>{const r=bar.getBoundingClientRect();T=clamp((ev.clientX-r.left)/r.width)*DUR;audio.currentTime=T;frame(T);};
+document.addEventListener('keydown',ev=>{if(ev.code==='Space'&&ev.target.tagName!=='INPUT'){ev.preventDefault();setPlaying(!playing);}});
+function loop(now){
+  if(playing){
+    if(!audio.paused&&audio.currentTime>0)T=audio.currentTime;else if(lastNow!==null)T+=(now-lastNow)/1000;
+    if(T>=DUR){T=DUR;setPlaying(false);}
+  }
+  lastNow=now;frame(T);requestAnimationFrame(loop);
+}
+frame(T);
+if(!qp.has('still')) requestAnimationFrame(loop);
+</script>
+</body>
+</html>

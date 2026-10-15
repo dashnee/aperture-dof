@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Hermes · 自我介绍</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:#04050b;color:#eef2ff;font-family:-apple-system,"PingFang SC","Noto Sans SC","Microsoft YaHei",sans-serif;overflow:hidden;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+#wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
+#stage{position:relative;height:min(100dvh,880px);width:min(100vw,calc(min(100dvh,880px)*9/16));overflow:hidden;container-type:size;
+  background:radial-gradient(120% 70% at 50% -10%,#1b2a66 0%,#080b1c 50%,#03040a 100%)}
+#grid{position:absolute;inset:-20%;background-image:linear-gradient(rgba(120,160,255,.07) 1px,transparent 1px),linear-gradient(90deg,rgba(120,160,255,.07) 1px,transparent 1px);background-size:9cqw 9cqw;transform:perspective(600px) rotateX(58deg) translateY(-8%);transform-origin:50% 0;animation:drift 18s linear infinite;mask-image:linear-gradient(transparent,#000 35%,#000 70%,transparent)}
+@keyframes drift{from{background-position:0 0}to{background-position:0 9cqw}}
+.orb{position:absolute;border-radius:50%;filter:blur(18px);opacity:.9;mix-blend-mode:screen;animation:float 9s ease-in-out infinite}
+.orb.a{width:70cqw;height:70cqw;left:-20cqw;top:8cqh;background:radial-gradient(circle,#5b8cff 0%,rgba(91,140,255,0) 65%)}
+.orb.b{width:60cqw;height:60cqw;right:-18cqw;bottom:6cqh;background:radial-gradient(circle,#ff7ad9 0%,rgba(255,122,217,0) 65%);animation-delay:-4s}
+@keyframes float{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(4cqw,-3cqh) scale(1.08)}}
+
+#bars{position:absolute;top:2.4cqh;left:5cqw;right:5cqw;display:flex;gap:1.2cqw;z-index:5}
+.seg{flex:1;height:3px;border-radius:2px;background:rgba(255,255,255,.18);overflow:hidden}
+.seg i{display:block;height:100%;width:0;background:#fff}
+.seg.done i{width:100%}
+
+.card{position:absolute;inset:0;padding:14cqh 8cqw 9cqh;display:flex;flex-direction:column;justify-content:center;opacity:0;pointer-events:none;transition:opacity .45s ease}
+.card.on{opacity:1}
+.kicker{font-size:3.3cqw;letter-spacing:.28em;text-transform:uppercase;color:#8fb0ff;margin-bottom:3cqh;opacity:0;transform:translateY(12px)}
+.h1{font-size:14cqw;line-height:1.02;font-weight:800;letter-spacing:-.02em}
+.h2{font-size:9.5cqw;line-height:1.12;font-weight:800;letter-spacing:-.01em}
+.p{font-size:4.4cqw;line-height:1.7;color:#c9d2f0;margin-top:3.2cqh}
+.grad{background:linear-gradient(90deg,#8fb0ff,#ff8fe0 60%,#ffd38a);-webkit-background-clip:text;background-clip:text;color:transparent}
+.tag{display:inline-block;margin:0 1.6cqw 1.6cqh 0;padding:1.4cqh 3.2cqw;border-radius:999px;border:1px solid rgba(143,176,255,.45);background:rgba(143,176,255,.08);font-size:4cqw;color:#dfe7ff}
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:2.6cqw;margin-top:4cqh}
+.tile{padding:3.2cqh 3.4cqw;border-radius:4cqw;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);opacity:0;transform:translateY(18px) scale(.97)}
+.tile b{display:block;font-size:5.2cqw;margin-bottom:.8cqh}
+.tile span{font-size:3.3cqw;color:#aeb8d9;line-height:1.5}
+.steps{position:relative;margin-top:5cqh;padding-left:9cqw}
+.steps:before{content:"";position:absolute;left:3cqw;top:2cqh;bottom:2cqh;width:2px;background:linear-gradient(#8fb0ff,#ff8fe0);transform-origin:top;transform:scaleY(0)}
+.card.on .steps:before{animation:grow 1.2s .3s ease forwards}
+@keyframes grow{to{transform:scaleY(1)}}
+.step{position:relative;margin-bottom:4.4cqh;opacity:0;transform:translateX(-10px)}
+.step:before{content:"";position:absolute;left:-7.6cqw;top:1.2cqh;width:3.6cqw;height:3.6cqw;border-radius:50%;background:#0b1030;border:2px solid #8fb0ff}
+.step b{font-size:6cqw}
+.step span{display:block;font-size:3.6cqw;color:#aeb8d9;margin-top:.6cqh;line-height:1.5}
+.limit{margin-top:4cqh;display:grid;gap:2.2cqh}
+.limit div{padding:2.6cqh 4cqw;border-left:3px solid #ff8fe0;background:rgba(255,143,224,.07);border-radius:0 3cqw 3cqw 0;font-size:4.1cqw;line-height:1.6;opacity:0;transform:translateX(-14px)}
+.end{font-size:8.6cqw;line-height:1.35;font-weight:700}
+.cta{margin-top:6cqh;font-size:4.4cqw;color:#8fb0ff;letter-spacing:.06em}
+.big{font-size:30cqw;font-weight:900;line-height:1;letter-spacing:-.04em;background:linear-gradient(90deg,#8fb0ff,#ff8fe0 60%,#ffd38a);-webkit-background-clip:text;background-clip:text;color:transparent;opacity:0;transform:scale(.9)}
+
+/* enter animations, only when card is on */
+.card.on .kicker{animation:rise .6s .05s ease forwards}
+.card.on .h1,.card.on .h2,.card.on .end,.card.on .big{animation:rise .8s .12s cubic-bezier(.2,.7,.2,1) forwards}
+.card.on .p,.card.on .cta,.card.on .tag{animation:rise .8s .35s ease forwards;opacity:0}
+.card.on .tile{animation:pop .6s cubic-bezier(.2,.8,.2,1) forwards}
+.card.on .tile:nth-child(1){animation-delay:.25s}.card.on .tile:nth-child(2){animation-delay:.35s}.card.on .tile:nth-child(3){animation-delay:.45s}.card.on .tile:nth-child(4){animation-delay:.55s}
+.card.on .tile:nth-child(5){animation-delay:.65s}.card.on .tile:nth-child(6){animation-delay:.75s}.card.on .tile:nth-child(7){animation-delay:.85s}.card.on .tile:nth-child(8){animation-delay:.95s}
+.card.on .step{animation:slide .6s ease forwards}
+.card.on .step:nth-child(1){animation-delay:.3s}.card.on .step:nth-child(2){animation-delay:.6s}.card.on .step:nth-child(3){animation-delay:.9s}.card.on .step:nth-child(4){animation-delay:1.2s}
+.card.on .limit div{animation:slide .6s ease forwards}
+.card.on .limit div:nth-child(1){animation-delay:.3s}.card.on .limit div:nth-child(2){animation-delay:.55s}.card.on .limit div:nth-child(3){animation-delay:.8s}.card.on .limit div:nth-child(4){animation-delay:1.05s}
+.card.on .big{animation:zoom 1.1s .1s cubic-bezier(.2,.8,.2,1) forwards}
+@keyframes rise{to{opacity:1;transform:none}}
+@keyframes pop{to{opacity:1;transform:none}}
+@keyframes slide{to{opacity:1;transform:none}}
+@keyframes zoom{to{opacity:1;transform:none}}
+
+.pulse{position:absolute;left:50%;top:44cqh;width:34cqw;height:34cqw;margin:-17cqw 0 0 -17cqw;border-radius:50%;background:radial-gradient(circle,#fff 0%,#8fb0ff 18%,rgba(143,176,255,0) 62%);opacity:0;transform:scale(.6)}
+.card.on .pulse{animation:pulse 3.2s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.5;transform:scale(.8)}50%{opacity:1;transform:scale(1.15)}}
+.hint{position:absolute;bottom:3.4cqh;left:0;right:0;text-align:center;font-size:3.1cqw;color:rgba(200,210,240,.5);letter-spacing:.14em;z-index:5}
+#tap{position:absolute;inset:0;z-index:4;display:flex}
+#tap div{flex:1}
+html.still *{animation:none!important;transition:none!important}
+html.still .card *{opacity:1!important;transform:none!important}
+html.still .card.on .steps:before{transform:scaleY(1)!important}
+</style>
+</head>
+<body>
+<div id="wrap">
+<div id="stage">
+  <div id="grid"></div>
+  <div class="orb a"></div><div class="orb b"></div>
+  <div id="bars"></div>
+
+  <!-- 1 HOOK -->
+  <section class="card" data-d="4200">
+    <div class="pulse"></div>
+    <div class="kicker">Hello · 你好</div>
+    <div class="h1">你好，<br>我是 <span class="grad">Hermes</span></div>
+    <div class="p">一个不只会聊天、还会动手做事的 AI 助手。</div>
+  </section>
+
+  <!-- 2 WHO -->
+  <section class="card" data-d="4200">
+    <div class="kicker">Who I am</div>
+    <div class="h2">我是一个<br><span class="grad">开源的 Agent</span></div>
+    <div class="p">由 Nous Research 开发。我运行在一台真实的机器上，能读文件、写代码、开浏览器、跑命令，而不只是给你一段建议。</div>
+    <div style="margin-top:5cqh"><span class="tag">Nous Research</span><span class="tag">Telegram 在线</span><span class="tag">可扩展技能</span></div>
+  </section>
+
+  <!-- 3 CAN DO -->
+  <section class="card" data-d="4800">
+    <div class="kicker">What I can do</div>
+    <div class="h2">能做的事</div>
+    <div class="tiles">
+      <div class="tile"><b>写代码</b><span>写、改、调试、跑测试</span></div>
+      <div class="tile"><b>做网页</b><span>静态页、动画、交互演示</span></div>
+      <div class="tile"><b>渲染与截图</b><span>用无头浏览器逐帧验证</span></div>
+      <div class="tile"><b>搜索资料</b><span>查网页、读文档、核对事实</span></div>
+      <div class="tile"><b>读写文件</b><span>处理文档、表格、项目目录</span></div>
+      <div class="tile"><b>定时任务</b><span>按时执行，结果送到你手机</span></div>
+      <div class="tile"><b>记住偏好</b><span>你的习惯，下次不用重复说</span></div>
+      <div class="tile"><b>沉淀流程</b><span>把做成的事写成可复用技能</span></div>
+    </div>
+  </section>
+
+  <!-- 4 HOW -->
+  <section class="card" data-d="4800">
+    <div class="kicker">How I work</div>
+    <div class="h2">我怎么干活</div>
+    <div class="steps">
+      <div class="step"><b>理解</b><span>先搞清你真正要什么，缺信息就问。</span></div>
+      <div class="step"><b>计划</b><span>拆成可以逐步验证的小步骤。</span></div>
+      <div class="step"><b>动手</b><span>写、改、运行，过程中保留证据。</span></div>
+      <div class="step"><b>验证</b><span>用截图、退出码、线上比对说话，不编造结果。</span></div>
+    </div>
+  </section>
+
+  <!-- 5 LIMITS -->
+  <section class="card" data-d="4800">
+    <div class="kicker">Honest limits</div>
+    <div class="h2">我的边界</div>
+    <div class="limit">
+      <div>沙箱环境偶尔不稳，遇到故障我会直接告诉你，不会假装成功。</div>
+      <div>我没法听声音、看不到你的屏幕，除非你把内容发给我。</div>
+      <div>我没法亲耳判断音乐好不好听，那一步需要你来定。</div>
+      <div>推送、导出这类不可逆的操作，我会先给预览，等你确认。</div>
+    </div>
+  </section>
+
+  <!-- 6 WORKING TOGETHER -->
+  <section class="card" data-d="4200">
+    <div class="kicker">How we work</div>
+    <div class="h2">我们怎么合作</div>
+    <div class="steps" style="margin-top:6cqh">
+      <div class="step"><b>你说目标</b><span>一句话就行，越具体越好。</span></div>
+      <div class="step"><b>我给预览</b><span>先做出能看的东西，附上链接。</span></div>
+      <div class="step"><b>你提意见</b><span>哪一段、哪个时间点，直接指出来。</span></div>
+      <div class="step"><b>确认后交付</b><span>满意了，再导出或推送。</span></div>
+    </div>
+  </section>
+
+  <!-- 7 END -->
+  <section class="card" data-d="5000">
+    <div class="pulse"></div>
+    <div class="kicker">Let's begin</div>
+    <div class="end">我会把每件事<br>做到能验证为止。</div>
+    <div class="cta">你的下一件事，是什么？</div>
+  </section>
+
+  <div class="hint">轻触右侧下一页 · 左侧上一页</div>
+  <div id="tap"><div id="prev"></div><div id="next"></div></div>
+</div>
+</div>
+
+<script>
+const cards=[...document.querySelectorAll('.card')];
+const barsEl=document.getElementById('bars');
+cards.forEach(()=>{const s=document.createElement('div');s.className='seg';s.innerHTML='<i></i>';barsEl.appendChild(s)});
+const segs=[...barsEl.children];
+const qp=new URLSearchParams(location.search);
+const still=qp.has('still');
+if(still) document.documentElement.classList.add('still');
+let idx=0, elapsed=0, last=null, paused=false, pressAt=0;
+function show(n){
+  idx=(n+cards.length)%cards.length; elapsed=0; last=null;
+  cards.forEach((c,k)=>c.classList.toggle('on',k===idx));
+  segs.forEach((s,k)=>{s.querySelector('i').style.width=k<idx?'100%':'0'});
+}
+function tick(now){
+  if(last!==null && !paused && !still){
+    elapsed+=now-last;
+    const d=+cards[idx].dataset.d;
+    segs[idx].querySelector('i').style.width=Math.min(100,elapsed/d*100)+'%';
+    if(elapsed>=d) show(idx+1);
+  }
+  last=now; requestAnimationFrame(tick);
+}
+// hold to pause, tap to navigate
+const stage=document.getElementById('stage');
+stage.addEventListener('pointerdown',e=>{pressAt=performance.now();paused=true;});
+stage.addEventListener('pointerup',e=>{
+  paused=false;
+  if(performance.now()-pressAt<260){
+    const r=stage.getBoundingClientRect(), x=(e.clientX-r.left)/r.width;
+    show(x<0.35?idx-1:idx+1);
+  }
+});
+document.addEventListener('keydown',e=>{
+  if(e.key==='ArrowRight'||e.key===' ') show(idx+1);
+  if(e.key==='ArrowLeft') show(idx-1);
+});
+show(+(qp.get('c')||0));
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>

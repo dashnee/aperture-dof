@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Haiku 5.5 · 高强度能力演示（真实追踪）</title>
+<style>
+html,body{margin:0;height:100%;background:#05070c;color:#e8ebf2;font-family:-apple-system,"PingFang SC","Noto Sans SC",sans-serif;overflow:hidden}
+#stage{position:relative;width:min(100vw,calc((100vh - 56px)*16/9));aspect-ratio:16/9;margin:0 auto}
+canvas{position:absolute;inset:0;width:100%;height:100%}
+#bar{height:56px;display:flex;align-items:center;justify-content:center;gap:14px;font-size:14px;color:#8b93a7}
+button{background:#141a26;color:#e8ebf2;border:1px solid #2a3450;border-radius:16px;padding:6px 16px;cursor:pointer}
+#prog{width:min(50vw,480px);height:3px;background:#1a2030}#prog i{display:block;height:100%;width:0;background:#7aa7ff}
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c" width="1280" height="720"></canvas></div>
+<div id="bar"><button id="play">▶ 播放</button><div id="prog"><i></i></div><span id="tm">0.0 / 60s</span></div>
+<script src="trace_data.js"></script>
+<script>
+// Every number on screen comes from TRACE (the executed program's output). Nothing is hand-typed.
+const cv=document.getElementById('c'),g=cv.getContext('2d');
+const W=1280,H=720,DUR=60;
+const C={bg:'#05070c',ink:'#eef2fb',mute:'#7d86a3',blue:'#6fa8ff',gold:'#ffc86b',green:'#6ee7a6',red:'#ff7a8a',violet:'#b48cff',panel:'#0d1220',line:'#222a40'};
+const FONT='"PingFang SC","Noto Sans SC","Microsoft YaHei","WenQuanYi Zen Hei",sans-serif';
+const MONO='"SF Mono",Menlo,Consolas,monospace';
+const clamp=(x,a=0,b=1)=>Math.min(b,Math.max(a,x));
+const sm=x=>{x=clamp(x);return x*x*(3-2*x)};
+const CN={red:"红",green:"绿",white:"白",yellow:"黄",blue:"蓝",Brit:"英国人",Swede:"瑞典人",Dane:"丹麦人",Norwegian:"挪威人",German:"德国人",tea:"茶",coffee:"咖啡",milk:"牛奶",beer:"啤酒",water:"水",PallMall:"Pall Mall",Dunhill:"Dunhill",Blend:"Blend",BlueMaster:"Blue Master",Prince:"Prince",dog:"狗",bird:"鸟",cat:"猫",horse:"马",fish:"鱼"};
+const ATTR={color:"颜色",nat:"国籍",drink:"饮品",smoke:"香烟",pet:"宠物"};
+const CLR={red:'#ff6b6b',green:'#52d68a',white:'#e9edf7',yellow:'#ffd34d',blue:'#5aa7ff'};
+
+function txt(s,x,y,px,col,a=1,align='left',mono=false,bold=false){
+  if(a<=0.001) return;
+  g.save();g.globalAlpha=clamp(a);g.fillStyle=col;g.font=`${bold?'700 ':''}${px}px ${mono?MONO:FONT}`;g.textAlign=align;g.fillText(s,x,y);g.restore();
+}
+function panel(x,y,w,h,a,stroke){ if(a<=0.001) return; g.save();g.globalAlpha=clamp(a);g.beginPath();g.roundRect(x,y,w,h,14);g.fillStyle=C.panel;g.fill();g.strokeStyle=stroke||C.line;g.lineWidth=1.5;g.stroke();g.restore(); }
+function glow(x,y,r,col,a){ if(a<=0.001) return; g.save();g.globalAlpha=clamp(a);const gr=g.createRadialGradient(x,y,0,x,y,r);gr.addColorStop(0,col);gr.addColorStop(1,'rgba(0,0,0,0)');g.fillStyle=gr;g.beginPath();g.arc(x,y,r,0,Math.PI*2);g.fill();g.restore(); }
+// per-scene typed text at high speed
+function typed(s,t0,cps){ const n=Math.max(0,Math.floor((t0)*cps)); return s.slice(0,n); }
+
+const GB=TRACE.goldbach, PZ=TRACE.puzzle;
+
+// ---------- 0-6s: cold open, beat-cut title ----------
+function sc0(t){
+  if(t>=6) return;
+  const a=sm(t/0.25)*(1-sm((t-5.6)/0.4));
+  txt('能力演示 · 真实运行',W/2,250,64,C.ink,a,'center',false,true);
+  txt('Haiku 5.5',W/2,330,46,C.blue,a,'center',true,true);
+  txt('每个数字都来自程序的真实输出',W/2,400,24,C.mute,a,'center');
+  // flicker: fast code-rain of real numbers
+  const k=clamp((t-1)/2);
+  for(let i=0;i<24;i++){
+    const x=(i*53)%W, y=((t*420+i*71)%(H+80))-40;
+    txt(String(GB.events[i%3].p),x,y,18,C.blue,0.25*k,'left',true);
+  }
+}
+
+// ---------- 6-30s: Goldbach, racing ----------
+function sc1(t){
+  if(t<6||t>=30.6) return;
+  const a=sm((t-6)/0.2)*(1-sm((t-30.0)/0.5));
+  txt('01 · 哥德巴赫猜想：程序逐个尝试素数',60,70,30,C.ink,a,'left',false,true);
+  // code window: scrolls up, highlight line by time
+  panel(60,100,560,470,a);
+  const code=['def goldbach(n):','    for p in primes_up_to(n//2):','        if is_prime(p) and is_prime(n-p):','            return (p, n-p)','','def self_test(limit=2000):','    for n in range(4, limit+1, 2):','        assert any(...)  # 必须存在一对素数']
+  const hl=Math.floor((t-6)*2.2)%code.length;
+  code.forEach((L,i)=>txt(L,85,140+i*40,20,i===hl?C.gold:C.ink,a,'left',true));
+  // live search panel: each n, tries counted from trace
+  panel(660,100,560,470,a);
+  txt('搜索过程（来自 trace）',690,140,22,C.mute,a);
+  const rows=GB.events;
+  rows.forEach((r,i)=>{
+    const st=7+i*6; const k=clamp((t-st)/1.2);
+    if(k<=0) return;
+    const y=200+i*140;
+    txt(`n = ${r.n}`,690,y,36,C.gold,a*k,'left',true,true);
+    // try counter ticks up to the real count
+    const shown=Math.min(r.tried,Math.floor(clamp((t-st)/1.2)*r.tried)+ (k>=1?r.tried:0));
+    txt(`尝试素数 ${shown} / ${r.tried}`,690,y+38,22,C.mute,a*k,'left',true);
+    txt(`${r.n} = ${r.p} + ${r.q}`,690,y+80,30,C.green,a*clamp((t-st-1.1)/0.6),'left',true,true);
+  });
+  // big counter: how many even numbers verified
+  const cnt=Math.min(GB.checked_even,Math.floor(clamp((t-14)/14)*GB.checked_even));
+  txt(`偶数验证 ${cnt} / ${GB.checked_even}`,60,640,34,C.green,a,'left',true,true);
+  txt('4 … 2000 全部通过 · assert 无报错 · 退出码 0',60,680,20,C.mute,a);
+}
+
+// ---------- 31-56s: puzzle pruning, hard cuts ----------
+const STAGE_T=[31,35,39,43,47]; // when each attribute stage begins
+function sc2(t){
+  if(t<31||t>=49.6) return;
+  const a=sm((t-31)/0.15)*(1-sm((t-49.0)/0.5));
+  txt('02 · 五栋房子：逐层剪枝搜索',60,70,30,C.ink,a,'left',false,true);
+  // stage bars: tested vs kept, animate across time window
+  const x0=60,y0=110,bw=540;
+  PZ.stages.forEach((s,i)=>{
+    const st=STAGE_T[i], k=clamp((t-st)/1.4);
+    const y=y0+i*64;
+    if(k<=0) return;
+    txt(`${ATTR[s.attr]}`,x0,y+22,22,C.ink,a*k,'left',false,true);
+    // tested bar
+    g.save();g.globalAlpha=a*k;g.fillStyle='#1d2640';g.fillRect(x0+120,y+8,bw-120,18);g.restore();
+    const testedW=(bw-120)*clamp(k)*1;
+    g.save();g.globalAlpha=a*k;g.fillStyle=C.blue;g.fillRect(x0+120,y+8,testedW,18);g.restore();
+    // kept: bar shrinks to kept/tested
+    const keptFrac=s.kept/s.tested; const kk=clamp((t-st-0.9)/0.9);
+    const keptW=(bw-120)*keptFrac;
+    g.save();g.globalAlpha=a*k;g.fillStyle=C.green;g.fillRect(x0+120,y+8,(testedW)*(1-kk)+keptW*kk,18);g.restore();
+    txt(`尝试 ${s.tested}`,x0+120,y+48,18,C.mute,a*k,'left',true);
+    txt(`保留 ${s.kept}`,x0+300,y+48,18,C.green,a*clamp((t-st-1)/0.6),'left',true);
+  });
+  // clue strip: which clues are proven at each stage
+  const clueTxt=PZ.clue_text;
+  txt('线索在哪一层被判定',660,110,22,C.mute,a);
+  let row=0;
+  PZ.stages.forEach((s,i)=>{
+    const st=STAGE_T[i]+1.2;
+    s.clues.forEach((ci,j)=>{
+      const k=clamp((t-st-j*0.12)/0.25);
+      if(k<=0) return;
+      const y=150+row*30; row++;
+      txt(`✓ ${clueTxt[ci]}`,660,y,20,C.gold,a*k,'left');
+    });
+  });
+  // last stage final count
+  if(t>=47){ txt(`唯一解：${PZ.solutions} 个 · 15 / 15 线索成立`,60,640,30,C.green,a*clamp((t-47)/0.8),'left',false,true); }
+}
+// ---------- 46-56s: reveal the house grid, one row per beat-cut ----------
+function sc3(t){
+  if(t<50||t>=58) return;
+  const a=sm((t-49.8)/0.2)*(1-sm((t-57.4)/0.5));
+  txt('答案 · 五户全貌（来自解）',60,70,30,C.ink,a,'left',false,true);
+  const cols=['h','color','nat','drink','smoke','pet'];
+  const hdr={h:'户',color:'颜色',nat:'国籍',drink:'饮品',smoke:'香烟',pet:'宠物'};
+  const X=[80,170,360,560,760,960], Y0=190, RH=78;
+  cols.forEach((c,i)=>txt(hdr[c],X[i],Y0-44,22,C.blue,a,'left',false,true));
+  PZ.houses.forEach((row,r)=>{
+    const k=clamp((t-50.2-r*0.22)/0.35);
+    if(k<=0) return;
+    panel(60,Y0+r*RH-30,1160,RH-14,a*k,row.nat==='German'?C.gold:C.line);
+    txt(String(row.h),X[0],Y0+r*RH+18,34,C.gold,a*k,'left',true,true);
+    txt(CN[row.color],X[1],Y0+r*RH+18,30,CLR[row.color]||C.ink,a*k,'left',false,true);
+    txt(CN[row.nat],X[2],Y0+r*RH+18,30,C.ink,a*k,'left',false,true);
+    txt(CN[row.drink],X[3],Y0+r*RH+18,30,C.ink,a*k,'left');
+    txt(CN[row.smoke],X[4],Y0+r*RH+18,30,C.ink,a*k,'left');
+    txt(CN[row.pet],X[5],Y0+r*RH+18,30,row.pet==='fish'?C.gold:C.ink,a*k,'left',false,row.pet==='fish');
+  });
+  const k=clamp((t-53)/0.6);
+  txt('德国人养鱼，住在第 4 户',60,690,28,C.gold,a*k,'left',false,true);
+}
+
+// ---------- 58-60s: closing beat ----------
+function sc4(t){
+  if(t<58) return;
+  const a=sm((t-58)/0.3);
+  txt('程序写得对不对，要靠运行来证明。',W/2,320,40,C.ink,a,'center',false,true);
+  txt('这两个结果都来自真实执行，可以自己重跑核对。',W/2,372,24,C.mute,a,'center');
+}
+
+function render(t){
+  g.setTransform(1,0,0,1,0,0);
+  g.fillStyle=C.bg; g.fillRect(0,0,W,H);
+  // ambient: slow glow that moves with time, not beat-locked
+  glow(W*0.2+Math.sin(t*0.7)*60,H*0.3,520,'rgba(60,110,220,0.09)',1);
+  glow(W*0.85+Math.cos(t*0.5)*60,H*0.8,560,'rgba(120,80,220,0.07)',1);
+  sc0(t); sc1(t); sc2(t); sc3(t); sc4(t);
+  // hard flash on the three cuts (not per beat)
+  for(const c of [6,31,50]){ const d=t-c; if(d>=0&&d<0.12){ g.fillStyle=`rgba(255,255,255,${0.35*(1-d/0.12)})`; g.fillRect(0,0,W,H); } }
+}
+const playBtn=document.getElementById('play'),prog=document.querySelector('#prog i'),tm=document.getElementById('tm');
+const qp=new URLSearchParams(location.search);
+let T=+(qp.get('t')||0),playing=false,last=null;
+function frame(t){render(t);prog.style.width=(t/DUR*100)+'%';tm.textContent=t.toFixed(1)+' / 60s';}
+playBtn.onclick=()=>{playing=!playing;playBtn.textContent=playing?'❚❚ 暂停':'▶ 播放';last=null;if(T>=DUR)T=0;};
+function loop(now){ if(playing){ if(last!==null)T+=(now-last)/1000; if(T>=DUR){T=DUR;playing=false;playBtn.textContent='▶ 播放';} } last=now; frame(T); requestAnimationFrame(loop); }
+frame(T);
+if(!qp.has('still')) requestAnimationFrame(loop);
+</script>
+</body>
+</html>

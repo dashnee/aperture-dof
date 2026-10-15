@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Hermes · 一镜到底</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%;background:#03040a;overflow:hidden;-webkit-tap-highlight-color:transparent}
+#wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#03040a}
+#stage{position:relative;height:min(100dvh,900px);width:min(100vw,calc(min(100dvh,900px)*9/16));background:#03040a;overflow:hidden}
+canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+#start{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:18px;background:rgba(3,4,10,.72);z-index:5;cursor:pointer;font-family:-apple-system,"PingFang SC","Noto Sans SC",sans-serif;color:#dfe7ff}
+#start b{font-size:clamp(18px,4vw,26px);letter-spacing:.2em;font-weight:600;border:1px solid #6f8cff;padding:14px 26px;border-radius:999px}
+#start span{font-size:13px;color:#8b97bd;letter-spacing:.06em}
+#start.hide{display:none}
+</style>
+</head>
+<body>
+<div id="wrap"><div id="stage">
+  <canvas id="c"></canvas>
+  <div id="start"><b>▶ 开始（含音乐）</b><span>Tap to start · 纯音乐，无语音</span></div>
+</div></div>
+<audio id="bgm" src="audio.m4a" preload="auto"></audio>
+<script>
+const cv=document.getElementById('c'),g=cv.getContext('2d');
+const DPR=Math.min(2,window.devicePixelRatio||1);
+const W=720,H=1280;            // logical portrait canvas
+const qp=new URLSearchParams(location.search);
+const still=qp.has('still');
+const DUR=90;
+const FONT='"PingFang SC","Noto Sans SC","Microsoft YaHei","WenQuanYi Zen Hei",sans-serif';
+function fit(){
+  const r=cv.getBoundingClientRect();
+  cv.width=Math.round(r.width*DPR); cv.height=Math.round(r.height*DPR);
+}
+
+// ---------- content: each block is a station on the camera path ----------
+// tf = focus time (s). x,y = world position (logical px). z = camera zoom at focus.
+const BLOCKS=[
+ {tf:4,  x:0,    y:0,    hero:true,
+  kick:'AGENT · 自我介绍', head:'HERMES', sub:'一个会动手的 AI Agent', en:'An agent that acts, not just answers', size:132},
+ {tf:13, x:-70,  y:1150,
+  kick:'我的主模型', head:'Claude\nHaiku 5.5', sub:'这是我当前的主模型，由 Anthropic 开发，通过 OpenRouter 接入。负责理解、推理与生成；动手的工具和记忆由 Hermes 框架提供。', en:'Main model: Claude Haiku 5.5 via OpenRouter', size:84},
+ {tf:22, x:80,   y:2300,
+  kick:'我是谁', head:'Hermes Agent', sub:'由 Nous Research 开源开发。模型负责思考，Agent 负责动手：运行在真实机器上，读文件、写代码、开浏览器、跑命令。', en:'The model thinks. The agent acts.', size:92},
+ {tf:31, x:-60,  y:3450,
+  kick:'能做的事', head:'写 · 做 · 验 · 搜', sub:'写代码与调试 · 做网页与动画 · 无头浏览器渲染、截图、逐帧验证 · 搜索并核对资料 · 读写文件与表格', en:'Code · Build · Verify · Search', size:92},
+ {tf:40, x:90,   y:4600,
+  kick:'能记住，能重复', head:'记忆 · 技能 · 定时', sub:'跨会话记住你的偏好；把做成的流程沉淀为技能，下次直接复用；按时执行任务，结果送到你的 Telegram。', en:'Remembers, reuses, runs on schedule', size:92},
+ {tf:49, x:0,    y:5750,
+  kick:'工作方式', head:'理解 → 计划\n→ 动手 → 验证', sub:'缺信息先问，不乱猜。每一步留下证据：截图、退出码、线上比对。失败就直说。', en:'Understand · Plan · Act · Verify', size:92},
+ {tf:58, x:-90,  y:6900,
+  kick:'我的边界', head:'我不假装', sub:'听不到声音，除非你把内容转成文字。沙箱偶尔不稳，我会直接报告故障。推送与导出等你确认。音乐好不好听，由你判断。', en:'Honest limits', size:104},
+ {tf:67, x:100,  y:8050,
+  kick:'合作方式', head:'你说目标\n我给预览', sub:'你提意见，我修改；你确认，我再交付。一次只做一件事，做到能验证为止。', en:'Goal → Preview → Feedback → Delivery', size:96},
+ {tf:78, x:0,    y:9150,
+  kick:'下一步', head:'你的下一件事，\n是什么？', sub:'', en:"What's next for you?", size:104, end:true},
+];
+
+// ---------- camera path: Catmull-Rom through keyframes (C1 continuous, never cut) ----------
+const KEYS=[{t:0,x:0,y:-520,z:0.42}];
+BLOCKS.forEach((b,i)=>{
+  KEYS.push({t:b.tf,x:b.x,y:b.y,z:b.end?1.0:(b.hero?1.0:1.0)});
+  const nx=BLOCKS[i+1];
+  if(nx){ // overview breath between stations
+    KEYS.push({t:b.tf+4.5,x:(b.x+nx.x)/2,y:(b.y+nx.y)/2+0,z:0.58});
+  }
+});
+KEYS.push({t:DUR,x:0,y:9150,z:0.5});
+KEYS.sort((a,b)=>a.t-b.t);
+function cr(prop,t){
+  const K=KEYS,n=K.length;
+  if(t<=K[0].t) return K[0][prop];
+  if(t>=K[n-1].t) return K[n-1][prop];
+  let i=0; while(i<n-2 && t>K[i+1].t) i++;
+  const p0=K[Math.max(i-1,0)][prop],p1=K[i][prop],p2=K[i+1][prop],p3=K[Math.min(i+2,n-1)][prop];
+  const u=(t-K[i].t)/(K[i+1].t-K[i].t), u2=u*u, u3=u2*u;
+  return 0.5*((2*p1)+(-p0+p2)*u+(2*p0-5*p1+4*p2-p3)*u2+(-p0+3*p1-3*p2+p3)*u3);
+}
+function cam(t){
+  const drift=still?0:0.0;
+  return {x:cr('x',t)+Math.sin(t*0.37)*6, y:cr('y',t), z:cr('z',t)*(1+0.02*Math.sin(t*0.5))};
+}
+
+// ---------- helpers ----------
+const clamp=(x,a=0,b=1)=>Math.min(b,Math.max(a,x));
+const sm=x=>{x=clamp(x);return x*x*(3-2*x)};
+function wrap(s,font,maxW){
+  // tokens: Latin words/numbers stay whole, CJK is split per character
+  g.font=font; const out=[];
+  for(const seg of s.split('\n')){
+    const toks=seg.match(/[A-Za-z0-9.+\-']+|\s|./g)||[];
+    let line='';
+    for(const tk of toks){
+      const cand=line+tk;
+      if(line && g.measureText(cand.trimEnd()).width>maxW){ out.push(line.trimEnd()); line=tk.trimStart(); }
+      else line=cand;
+    }
+    out.push(line.trimEnd());
+  }
+  return out;
+}
+
+// ---------- background layers (parallax depth) ----------
+const STARS=[];let sd=2024;const rnd=()=>(sd=(sd*16807)%2147483647)/2147483647;
+for(let i=0;i<260;i++) STARS.push({x:rnd()*W,y:rnd()*H,d:[0.25,0.5,1.0][i%3],r:[0.8,1.4,2.2][i%3]*(0.6+rnd()*0.6)});
+const BOKEH=[];
+for(let i=0;i<16;i++) BOKEH.push({x:rnd()*W,y:rnd()*H,r:50+rnd()*110,d:0.25+rnd()*0.25,c:[ '255,200,130','140,170,255','255,130,210' ][i%3],a:0.05+rnd()*0.08,hex:i%2===0});
+function wrapMod(v,m){return ((v%m)+m)%m;}
+
+function drawBackground(t,C){
+  const bg=g.createRadialGradient(W/2,H*0.25,40,W/2,H*0.4,H*0.9);
+  bg.addColorStop(0,'#17245a'); bg.addColorStop(0.45,'#070a1c'); bg.addColorStop(1,'#03040a');
+  g.fillStyle=bg; g.fillRect(0,0,W,H);
+  // bokeh (aperture hint): soft discs and hexagons drifting with depth
+  g.globalCompositeOperation='lighter';
+  for(const b of BOKEH){
+    const px=wrapMod(b.x-C.x*b.d*0.8+W/2,W+400)-200, py=wrapMod(b.y-C.y*b.d*0.8+H/2,H+400)-200;
+    g.fillStyle=`rgba(${b.c},${b.a})`; g.beginPath();
+    if(b.hex){ for(let k=0;k<6;k++){const an=k/6*Math.PI*2+0.4;const x=px+b.r*Math.cos(an),y=py+b.r*Math.sin(an);k?g.lineTo(x,y):g.moveTo(x,y);} g.closePath(); }
+    else g.arc(px,py,b.r,0,Math.PI*2);
+    g.fill();
+  }
+  // stars at three depths
+  for(const s of STARS){
+    const px=wrapMod(s.x-C.x*s.d*0.7+W/2,W), py=wrapMod(s.y-C.y*s.d*0.7+H/2,H);
+    const a=0.35+0.4*Math.sin(t*1.3+s.x);
+    g.fillStyle=`rgba(230,238,255,${a*s.d})`; g.beginPath(); g.arc(px,py,s.r*(0.6+0.4*s.d),0,Math.PI*2); g.fill();
+  }
+  g.globalCompositeOperation='source-over';
+}
+
+// ---------- text stations ----------
+function blockAlpha(b,t){
+  return sm((t-(b.tf-0.8))/1.0)*(1-sm((t-(b.tf+3.6))/1.2));
+}
+function drawBlock(b,t,C){
+  const a=blockAlpha(b,t); if(a<=0.002) return;
+  // typewriter reveal (characters, not whole block fades)
+  const r=sm((t-(b.tf-1.7))/1.2);
+  const z=C.z;
+  // screen position of block centre
+  const sx=W/2+(b.x-C.x)*z, sy=H/2+(b.y-C.y)*z;
+  g.save();
+  g.translate(sx,sy); g.scale(z,z);
+  const maxW=600;
+  const kickF=`600 26px ${FONT}`, headF=`800 ${b.size}px ${FONT}`, subF=`400 34px ${FONT}`, enF=`400 22px ${FONT}`;
+  const kick=b.kick?wrap(b.kick,kickF,maxW):[];
+  const head=wrap(b.head,headF,maxW);
+  const sub=b.sub?wrap(b.sub,subF,maxW):[];
+  const en=b.en?wrap(b.en,enF,maxW):[];
+  const lhK=40, lhH=b.size*1.12, lhS=52, lhE=34, gap=26;
+  const totalH=kick.length*lhK+head.length*lhH+(sub.length?gap+sub.length*lhS:0)+(en.length?gap+en.length*lhE:0);
+  let y=-totalH/2;
+  const total=[...kick,...head,...sub,...en].join('').length;
+  let budget=Math.floor(total*Math.max(0.0,Math.min(1,r)))+(r>=0.999?1e9:0);
+  g.textAlign='center'; g.textBaseline='top';
+  g.shadowColor='rgba(0,0,0,.65)'; g.shadowBlur=26;
+  const put=(line,font,color,lh)=>{
+    const n=Math.max(0,Math.min(line.length,budget)); budget-=line.length;
+    g.font=font; g.fillStyle=color; g.globalAlpha=a*(n>0?1:0);
+    g.fillText(line.slice(0,n),0,y);
+    y+=lh;
+  };
+  kick.forEach(l=>put(l,kickF,'rgba(143,176,255,1)',lhK));
+  g.textAlign='center';
+  y+=6;
+  head.forEach(l=>put(l,headF,'#f4f7ff',lhH));
+  if(sub.length){ y+=gap; sub.forEach(l=>put(l,subF,'#c9d4f5',lhS)); }
+  if(en.length){ y+=gap; en.forEach(l=>put(l,enF,'#7f8ab0',lhE)); }
+  g.globalAlpha=1; g.shadowBlur=0;
+  g.restore();
+}
+
+// ---------- flashes at station focus (only at focus, not per beat) ----------
+function drawFlash(t){
+  let f=0;
+  for(const b of BLOCKS){ const d=t-b.tf; if(d>=0&&d<0.9) f=Math.max(f,(b.hero?0.22:0.12)*Math.exp(-d*5)); }
+  if(f>0.001){ g.fillStyle=`rgba(200,215,255,${f})`; g.fillRect(0,0,W,H); }
+}
+
+// ---------- render(t) ----------
+let lastT=-1;
+function render(t){
+  const C=cam(t);
+  g.setTransform(1,0,0,1,0,0);
+  const s=cv.width/W;
+  g.setTransform(s,0,0,s,0,0);
+  // the logical canvas is W x H; letterbox handled by CSS (9:16 stage)
+  drawBackground(t,C);
+  for(const b of BLOCKS) drawBlock(b,t,C);
+  drawFlash(t);
+  // end: a single point of light returns (echo of the opening)
+  if(t>84){ const k=sm((t-84)/4); const gr=g.createRadialGradient(W/2,H/2,0,W/2,H/2,240); gr.addColorStop(0,`rgba(255,246,230,${0.9*k})`); gr.addColorStop(1,'rgba(0,0,0,0)'); g.fillStyle=gr; g.fillRect(0,0,W,H); }
+  // progress hairline
+  g.fillStyle='rgba(143,176,255,.5)'; g.fillRect(0,H-3,W*(t/DUR),3);
+}
+
+// ---------- clock ----------
+const audio=document.getElementById('bgm');
+let T=+(qp.get('t')||0), playing=false, lastNow=null;
+const startEl=document.getElementById('start');
+function start(){
+  startEl.classList.add('hide'); playing=true; audio.currentTime=0; audio.play().catch(()=>{}); lastNow=null;
+}
+startEl.addEventListener('click',start);
+function loop(now){
+  if(playing){
+    if(!audio.paused && audio.currentTime>0) T=audio.currentTime;
+    else if(lastNow!==null) T+=(now-lastNow)/1000;
+    if(T>=DUR){T=DUR;playing=false;}
+  }
+  lastNow=now; render(T); requestAnimationFrame(loop);
+}
+fit(); window.addEventListener('resize',fit);
+if(still){ startEl.classList.add('hide'); fit(); render(T); }
+else { render(T); requestAnimationFrame(loop); }
+</script>
+</body>
+</html>

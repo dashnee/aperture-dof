@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Haiku 5.5 · 能力演示（真实运行）</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b0d12;color:#e8ebf2;font-family:-apple-system,"PingFang SC","Noto Sans SC",sans-serif;overflow:hidden}
+  #stage{position:relative;width:min(100vw,calc((100vh - 60px)*16/9));aspect-ratio:16/9;margin:0 auto;background:#0b0d12;overflow:hidden}
+  canvas{position:absolute;inset:0;width:100%;height:100%}
+  #bar{height:60px;display:flex;align-items:center;justify-content:center;gap:14px;font-size:14px;color:#8b93a7}
+  button{background:#161a24;color:#e8ebf2;border:1px solid #2a3142;border-radius:16px;padding:6px 16px;cursor:pointer;font-size:14px}
+  #prog{width:min(50vw,480px);height:3px;background:#1d2230}#prog i{display:block;height:100%;width:0;background:#7aa7ff}
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="c" width="1280" height="720"></canvas></div>
+<div id="bar"><button id="play">▶ 播放</button><div id="prog"><i></i></div><span id="tm">0.0 / 60s</span></div>
+
+<script>
+// ===== REAL OUTPUTS (copied verbatim from the executed runs) =====
+const GB = {
+  primes50:[2,3,5,7,11,13,17,19,23,29,31,37,41,43,47],
+  pairs:[[28,5,23],[100,3,97],[1234,3,1231]],
+  checked:999,
+};
+const PZ = {
+  nodes:5520, sols:1,
+  houses:[
+    {h:1,color:"yellow",nat:"Norwegian",drink:"water",smoke:"Dunhill",pet:"cat"},
+    {h:2,color:"blue",nat:"Dane",drink:"tea",smoke:"Blend",pet:"horse"},
+    {h:3,color:"red",nat:"Brit",drink:"milk",smoke:"PallMall",pet:"bird"},
+    {h:4,color:"green",nat:"German",drink:"coffee",smoke:"Prince",pet:"fish"},
+    {h:5,color:"white",nat:"Swede",drink:"beer",smoke:"BlueMaster",pet:"dog"},
+  ],
+  clues:15,
+};
+const CN={red:"红",green:"绿",white:"白",yellow:"黄",blue:"蓝",Brit:"英国人",Swede:"瑞典人",Dane:"丹麦人",Norwegian:"挪威人",German:"德国人",tea:"茶",coffee:"咖啡",milk:"牛奶",beer:"啤酒",water:"水",PallMall:"Pall Mall",Dunhill:"Dunhill",Blend:"Blend",BlueMaster:"Blue Master",Prince:"Prince",dog:"狗",bird:"鸟",cat:"猫",horse:"马",fish:"鱼"};
+
+const cv=document.getElementById('c'),g=cv.getContext('2d');
+const W=1280,H=720,DUR=60,TAU=Math.PI*2;
+const clamp=(x,a=0,b=1)=>Math.min(b,Math.max(a,x));
+const sm=x=>{x=clamp(x);return x*x*(3-2*x)};
+const FONT='"PingFang SC","Noto Sans SC","Microsoft YaHei","WenQuanYi Zen Hei",sans-serif';
+const MONO='"SF Mono",Menlo,Consolas,monospace';
+const C={bg:'#0b0d12',ink:'#e8ebf2',mute:'#8b93a7',blue:'#7aa7ff',gold:'#f2c572',green:'#7fd6a0',red:'#ff7a7a',panel:'#131722',line:'#2a3142'};
+function txt(s,x,y,px,col,a=1,align='left',mono=false){
+  g.save();g.globalAlpha=clamp(a);g.fillStyle=col;g.font=`${px}px ${mono?MONO:FONT}`;g.textAlign=align;g.fillText(s,x,y);g.restore();
+}
+function box(x,y,w,h,r,fill,stroke,a=1){
+  g.save();g.globalAlpha=clamp(a);g.beginPath();g.roundRect(x,y,w,h,r);
+  if(fill){g.fillStyle=fill;g.fill();} if(stroke){g.strokeStyle=stroke;g.lineWidth=1.5;g.stroke();} g.restore();
+}
+function typeLines(lines,x,y,px,lh,col,t0,t,cps=38){
+  // characters revealed at cps, based on absolute time
+  let n=Math.max(0,Math.floor((t-t0)*cps)); let row=0;
+  for(const L of lines){
+    const show=L.slice(0,Math.max(0,n)); n-=L.length;
+    if(show) txt(show,x,y+row*lh,px,col,1,'left',false);
+    row++;
+  }
+}
+
+// ---------- scene 1 (0-8s): title ----------
+function s1(t){
+  const a=sm(t/1.2)*(1-sm((t-7)/0.8));
+  txt('Haiku 5.5 · 能力演示',W/2,300,58,C.ink,a,'center');
+  txt('下面每一步都是真实运行的结果，不是预先写好的答案。',W/2,350,24,C.mute,a,'center');
+  txt('演示 1 · 写程序并自测      演示 2 · 逻辑推理',W/2,430,22,C.blue,a,'center');
+}
+
+// ---------- scene 2 (8-30s): Goldbach ----------
+function s2(t){
+  const a=sm((t-8)/0.6)*(1-sm((t-29.6)/0.4));
+  if(a<=0) return;
+  txt('演示 1 · 哥德巴赫猜想：程序 + 自动测试',60,80,30,C.ink,a);
+  // code panel
+  const code=[
+    'def goldbach(n):',
+    '    for p in sieve(n):',
+    '        if p > n // 2: break',
+    '        if is_prime(n - p):',
+    '            return (p, n - p)',
+    '',
+    'def self_test(limit=2000):',
+    '    for n in range(4, limit+1, 2):',
+    '        p, q = goldbach(n)',
+    '        assert p + q == n',
+  ];
+  box(60,120,560,470,14,C.panel,C.line,a);
+  code.forEach((L,i)=>{
+    const k=clamp((t-9-i*0.35)/0.3);
+    if(k>0) txt(L,90,170+i*34,20,i===0||i===6?C.blue:C.ink,a*k,'left',true);
+  });
+  // results panel: each line appears when its real output is produced
+  box(660,120,560,470,14,C.panel,C.line,a);
+  txt('运行输出（退出码 0）',690,170,20,C.mute,a);
+  const lines=[
+    ['素数 ≤ 50：',''],['  '+GB.primes50.join(' '),''],
+    ['28 = 5 + 23',''],['100 = 3 + 97',''],['1234 = 3 + 1231',''],
+    [`检查偶数 4…2000：${GB.checked} 个`,''],['all tests passed',''],
+  ];
+  lines.forEach((L,i)=>{
+    const k=clamp((t-18-i*1.1)/0.8);
+    if(k>0) txt(L[0]+(L[1]?'  '+L[1]:''),690,215+i*44,19,i===5?C.green:C.ink,a*k,'left',true);
+  });
+  txt('每个 n 都由程序找出两个素数相加，并用 assert 验证。',60,650,20,C.mute,a);
+}
+
+// ---------- scene 3 (30-56s): puzzle ----------
+function s3(t){
+  const a=sm((t-30.4)/0.6)*(1-sm((t-55.5)/0.5));
+  if(a<=0) return;
+  txt('演示 2 · 五栋房子的逻辑谜题：穷举搜索',60,80,30,C.ink,a);
+  txt(`搜索节点 ${PZ.nodes}，找到解 ${PZ.sols} 个；15 条线索逐条核对。`,60,120,20,C.mute,a);
+  const cols=[['house','户'],['color','颜色'],['nat','国籍'],['drink','饮品'],['pet','宠物']];
+  const X0=110,Y0=180,CW=190,RH=66;
+  // grid appears column by column
+  cols.forEach((c,ci)=>{
+    const k=clamp((t-33-ci*0.5)/0.6);
+    txt(c[1],X0+ci*CW+CW/2-10,Y0-20,22,C.blue,a*k,'center');
+  });
+  PZ.houses.forEach((row,ri)=>{
+    const rk=clamp((t-36-ri*1.2)/0.7);
+    if(rk<=0) return;
+    box(X0-10,Y0+ri*RH,cols.length*CW+10,RH-10,10,C.panel,C.line,a*rk);
+    txt(`第 ${row.h} 户`,X0,Y0+ri*RH+34,22,C.gold,a*rk);
+    const keys=['color','nat','drink','pet'];
+    keys.forEach((kk,ci)=>{
+      const v=row[kk];
+      txt(CN[v]||v,X0+(ci+1)*CW+CW/2-10,Y0+ri*RH+34,22,C.ink,a*rk,'center');
+    });
+  });
+  // clue check strip (real: all 15 hold)
+  const k=clamp((t-44)/2);
+  if(k>0) txt(`15 / 15 条线索核对通过`,60,650,24,C.green,a*k);
+  const k2=clamp((t-48)/2);
+  if(k2>0) txt('答案：德国人养鱼，住在第 4 户',60,690,22,C.gold,a*k2);
+}
+
+// ---------- scene 4 (56-60s): closing ----------
+function s4(t){
+  const a=sm((t-56)/0.8);
+  txt('程序写得对不对，要靠运行来证明。',W/2,330,36,C.ink,a,'center');
+  txt('这两个结果都来自真实执行，可以自己重跑核对。',W/2,380,24,C.mute,a,'center');
+}
+
+function render(t){
+  g.setTransform(1,0,0,1,0,0);
+  g.fillStyle=C.bg;g.fillRect(0,0,W,H);
+  s1(t); s2(t); s3(t); s4(t);
+  if(t<0.5){g.fillStyle=`rgba(11,13,18,${1-t/0.5})`;g.fillRect(0,0,W,H);}
+}
+
+// ---------- clock ----------
+const playBtn=document.getElementById('play'),prog=document.querySelector('#prog i'),tm=document.getElementById('tm');
+const qp=new URLSearchParams(location.search);
+let T=+(qp.get('t')||0),playing=false,last=null;
+function frame(t){render(t);prog.style.width=(t/DUR*100)+'%';tm.textContent=t.toFixed(1)+' / 60s';}
+playBtn.onclick=()=>{playing=!playing;playBtn.textContent=playing?'❚❚ 暂停':'▶ 播放';last=null;if(T>=DUR)T=0;};
+function loop(now){
+  if(playing){ if(last!==null)T+=(now-last)/1000; if(T>=DUR){T=DUR;playing=false;playBtn.textContent='▶ 播放';} }
+  last=now; frame(T); requestAnimationFrame(loop);
+}
+frame(T);
+if(!qp.has('still')) requestAnimationFrame(loop);
+</script>
+</body>
+</html>

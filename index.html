@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>光圈与景深 · Aperture &amp; Depth of Field</title>
+<style>
+  html,body{margin:0;background:#06080f;color:#e9edf5;font-family:-apple-system,"PingFang SC","Noto Sans SC","Microsoft YaHei",Helvetica,Arial,sans-serif}
+  h1{font-weight:400;font-size:15px;letter-spacing:.2em;text-align:center;margin:14px 0 6px;opacity:.7}
+  #wrap{position:relative;width:min(100vw,calc((100vh - 150px)*16/9));margin:0 auto;aspect-ratio:16/9;overflow:hidden}
+  canvas{width:100%;height:100%;display:block;background:#06080f}
+  #sub{position:absolute;left:0;right:0;bottom:6%;text-align:center;pointer-events:none;padding:0 6%}
+  #zh{font-size:clamp(16px,2.6vw,34px);letter-spacing:.04em;text-shadow:0 2px 8px #000;min-height:1.4em}
+  #en{font-size:clamp(12px,1.7vw,22px);opacity:.8;margin-top:.45em;text-shadow:0 2px 8px #000;min-height:1.3em}
+  #ctrl{display:flex;gap:12px;align-items:center;justify-content:center;padding:14px;flex-wrap:wrap}
+  button{background:#1a2030;color:#e9edf5;border:1px solid #34405a;border-radius:8px;padding:8px 16px;cursor:pointer;font-size:14px}
+  #bar{width:min(70vw,720px);height:6px;background:#1a2030;border-radius:3px;cursor:pointer}
+  #prog{height:100%;width:0;background:linear-gradient(90deg,#f2c572,#6fd3ff);border-radius:3px}
+  #time{font-variant-numeric:tabular-nums;opacity:.7;min-width:110px;text-align:center;font-size:14px}
+</style>
+</head>
+<body>
+<h1>光圈与景深 · APERTURE &amp; DEPTH OF FIELD</h1>
+<div id="wrap">
+  <canvas id="c" width="1280" height="720"></canvas>
+  <div id="sub"><div id="zh"></div><div id="en"></div></div>
+</div>
+<div id="ctrl">
+  <button id="play">▶ 播放 / Play</button>
+  <div id="bar"><div id="prog"></div></div>
+  <span id="time">0.0 / 60s</span>
+</div>
+<audio id="bgm" src="audio.m4a" preload="auto"></audio>
+
+<script>
+const cv=document.getElementById('c'), g=cv.getContext('2d');
+const W=1280,H=720,DUR=60,TAU=Math.PI*2,XF=0.3;
+const audio=document.getElementById('bgm'), btn=document.getElementById('play');
+const bar=document.getElementById('bar'), prog=document.getElementById('prog');
+const tlabel=document.getElementById('time'), zhEl=document.getElementById('zh'), enEl=document.getElementById('en');
+const params=new URLSearchParams(location.search);
+let T=parseFloat(params.get('t')||'0'), playing=false, lastNow=null, GA=1;
+
+const ease=x=>{x=Math.min(1,Math.max(0,x));return x*x*(3-2*x)};
+function kf(keys,t){
+  if(t<=keys[0][0]) return keys[0][1];
+  for(let i=1;i<keys.length;i++){
+    if(t<=keys[i][0]){const a=keys[i-1],b=keys[i];return a[1]+(b[1]-a[1])*ease((t-a[0])/(b[0]-a[0]));}
+  }
+  return keys[keys.length-1][1];
+}
+// 120 BPM pulse (0.5 s period): sharp attack, quick decay, used to punch the camera on beats
+const beat=u=>Math.exp(-6*((u*2)%1));
+
+// f-number curves, local scene time (snappy, beat-length moves)
+const fB=u=>kf([[0,1.4],[0.8,16],[2.6,16],[3.2,2],[4.6,2],[5.4,11],[6.6,11],[7.2,2],[8.6,2],[9.2,16],[10.6,16],[11,1.4]],u);
+const fD=u=>kf([[0,2],[2,2],[3,16],[5,16],[6,4],[8,4],[9,11],[11,11],[12,2],[14,2]],u);
+
+// ---------- drawing helpers ----------
+function bg(){g.save();g.globalAlpha=GA;g.fillStyle='#06080f';g.fillRect(-W,-H,3*W,3*H);g.restore();}
+function circ(x,y,r,col,blur=0,a=1){
+  r=Math.max(r,0.5);
+  g.save();g.globalAlpha=GA*a;
+  if(blur>0.3){
+    // feathered disc: cheap bokeh (radial gradient, no ctx.filter -> fast)
+    const R=r+blur*0.5, inner=Math.max(0,(r-blur*0.5)/R);
+    const gr=g.createRadialGradient(x,y,0,x,y,R);
+    gr.addColorStop(0,col);gr.addColorStop(Math.min(inner,0.98),col);gr.addColorStop(1,'rgba(0,0,0,0)');
+    g.fillStyle=gr;g.beginPath();g.arc(x,y,R,0,TAU);g.fill();
+  } else {
+    g.fillStyle=col;g.beginPath();g.arc(x,y,r,0,TAU);g.fill();
+  }
+  g.restore();
+}
+function ring(x,y,r,col,w=2,a=1){
+  g.save();g.globalAlpha=GA*a;g.strokeStyle=col;g.lineWidth=w;
+  g.beginPath();g.arc(x,y,r,0,TAU);g.stroke();g.restore();
+}
+function line(x1,y1,x2,y2,col,w=1,a=1,blur=0){
+  g.save();g.globalAlpha=GA*a*(1-Math.min(blur,30)/45);g.strokeStyle=col;g.lineWidth=w;
+  g.beginPath();g.moveTo(x1,y1);g.lineTo(x2,y2);g.stroke();g.restore();
+}
+function glow(x,y,r,col,a=1){
+  g.save();g.globalAlpha=GA*a;
+  const gr=g.createRadialGradient(x,y,0,x,y,r);
+  gr.addColorStop(0,col);gr.addColorStop(1,'rgba(0,0,0,0)');
+  g.fillStyle=gr;g.beginPath();g.arc(x,y,r,0,TAU);g.fill();g.restore();
+}
+function text(s,x,y,size,col,a=1,align='left'){
+  g.save();g.globalAlpha=GA*a;g.fillStyle=col;
+  g.font=`${size}px "SF Mono",Menlo,Consolas,monospace`;g.textAlign=align;g.fillText(s,x,y);g.restore();
+}
+function hexPath(cx,cy,r){
+  g.beginPath();
+  for(let i=0;i<6;i++){const a=i*TAU/6+Math.PI/6;const x=cx+r*Math.cos(a),y=cy+r*Math.sin(a);i?g.lineTo(x,y):g.moveTo(x,y);}
+  g.closePath();
+}
+function person(x,base,h,col,blur=0,a=1){
+  const hr=h*0.085, headY=base-h+hr;
+  circ(x,headY,hr,col,blur,a);
+  g.save();g.globalAlpha=GA*a*(1-Math.min(blur,30)/60);g.fillStyle=col;
+  g.beginPath();g.ellipse(x,base-h*0.28,h*0.19,h*0.30,0,0,TAU);g.fill();
+  g.beginPath();g.ellipse(x,base-h*0.02,h*0.12,h*0.06,0,0,TAU);g.fill();
+  g.restore();
+}
+
+// ---------- scenes (u = local time) ----------
+// A 0-8s : hook — bokeh light, focus pull
+function drawA(u){
+  bg();
+  const b=kf([[0,46],[2.2,1.2],[8,1.2]],u);
+  glow(640,360,300,'rgba(242,197,114,0.22)',1);
+  circ(640,360,40,'#f2c572',b*1.6,0.28);
+  circ(640,360,18,'#f2c572',b,1);
+  ring(640,360,70+u*6,'rgba(111,211,255,0.25)',1.5,ease(u/1.5));
+}
+
+// B 8-19s : iris snaps open/closed on each beat
+function drawB(u){
+  bg();
+  const f=fB(u), R=250, cx=640, cy=360;
+  const ra=60+170*(1.4/f);
+  circ(cx,cy,R,'#0d1322',0,1);
+  glow(cx,cy,ra*2.2,'rgba(111,211,255,0.55)',1);
+  g.save();g.globalAlpha=GA;g.fillStyle='rgba(235,248,255,0.95)';hexPath(cx,cy,ra);g.fill();g.restore();
+  const tw=0.9*(1-ra/R)+0.25;
+  for(let i=0;i<6;i++){
+    const a=i*TAU/6+Math.PI/6;
+    line(cx+ra*Math.cos(a),cy+ra*Math.sin(a),cx+R*Math.cos(a+tw),cy+R*Math.sin(a+tw),'#2a3550',16,1);
+  }
+  ring(cx,cy,R,'rgba(111,211,255,0.6)',3,1);
+  text('光圈 Aperture',cx,88,26,'#6fd3ff',0.9,'center');
+  text('f/'+f.toFixed(1),1040,330,44,'#f2c572',1,'center');
+  text(f>8?'门收窄 · 进光少':'门开大 · 进光多',1040,372,20,'#e9edf5',0.6,'center');
+}
+
+// C 19-33s : same point source, two apertures -> different blur disc
+function panel(ox,f,col,label,p){
+  const D=320/f, cy=360, src=ox+90, L=ox+330, xf=ox+530, xs=ox+470;
+  g.save();g.globalAlpha=GA*p;g.fillStyle='#253049';
+  g.fillRect(L-7,90,14,cy-D/2-90);g.fillRect(L-7,cy+D/2,14,630-(cy+D/2));
+  g.restore();
+  for(const e of [cy-D/2,cy+D/2]){
+    line(src,cy,L,e,'rgba(230,245,255,0.35)',2,p);
+    const ys=cy+(e-cy)*(xf-xs)/(xf-L);
+    line(L,e,xs,ys,col,2,0.75*p);
+  }
+  line(xs,130,xs,590,'#5b6785',2,0.6*p);
+  circ(src,cy,6,'#ffffff',0,p);
+  circ(xf,cy,3,col,0,0.6*p);
+  circ(xs,cy,Math.max(2,0.15*D),col,1,p);
+  text(label,ox+320,120,24,col,p,'center');
+  text('光斑 disc ≈ '+(0.3*D).toFixed(0)+' px',xs,cy+120,18,'#e9edf5',0.7*p,'center');
+}
+function drawC(u){
+  bg();
+  const p=ease(u/1.2);
+  panel(0,16,'#6fd3ff','f/16 · 光圈小 Small aperture',p);
+  panel(640,2,'#f2c572','f/2 · 光圈大 Wide aperture',p);
+  line(640,60,640,660,'#1d2740',2,1);
+}
+
+// D 33-47s : depth of field — sharpness band snaps with aperture
+function drawD(u){
+  bg();
+  const f=fD(u), band=0.15+0.05*f;
+  const bl=dz=>Math.min(40,150/f*Math.max(0,Math.abs(dz)-band));
+  for(let i=0;i<22;i++){
+    const x=(i*97+(i*i*37)%113)%1280, y=250+((i*53)%90), r=5+(i%3)*3;
+    circ(x,y,r,'#f2c572',bl(1.6),0.9);
+  }
+  person(640,540,270,'#f2c572',bl(0),1);
+  for(let i=0;i<26;i++){
+    const x=(i*53)%1320-20, h=120+((i*71)%150);
+    line(x,740,x+((i%2)?12:-10),740-h,'#6fd3ff',6,0.55,bl(-1.1));
+  }
+  text('f/'+f.toFixed(1),640,70,40,'#f2c572',1,'center');
+  text('景深 Depth of field',640,108,22,'#6fd3ff',0.9,'center');
+  const bw=band*420;
+  g.save();g.globalAlpha=GA*0.9;g.fillStyle='rgba(242,197,114,0.18)';g.fillRect(640-bw/2,150,bw,10);g.restore();
+  line(640-210,155,640+210,155,'#34405a',2,0.8);
+}
+
+// E 47-53s : human touch — subject sharp, crowd soft
+function drawE(u){
+  bg();
+  let seed=7;const rnd=()=>{seed=(seed*16807)%2147483647;return seed/2147483647;};
+  for(let i=0;i<22;i++){
+    const x=rnd()*W, y=rnd()*H*0.8, r=26+rnd()*40;
+    circ(x,y,r,i%2?'#f2c572':'#6fd3ff',34,0.32);
+  }
+  glow(640,240,260,'rgba(255,217,160,0.35)',1);
+  person(980,560,340,'#8fa0c4',10,0.45);
+  person(260,560,320,'#8fa0c4',12,0.4);
+  person(640,570,400,'#ffe0b0',0,1);
+}
+
+// F 53-60s : echo of the opening — light softens back into bokeh
+function drawF(u){
+  bg();
+  const b=kf([[0,1],[4,30],[7,46]],u);
+  glow(640,360,320,'rgba(242,197,114,0.22)',1);
+  circ(640,360,40,'#f2c572',b*1.6,0.28);
+  circ(640,360,18,'#f2c572',b,1);
+}
+
+const SC=[[0,8,drawA],[8,19,drawB],[19,33,drawC],[33,47,drawD],[47,53,drawE],[53,60,drawF]];
+
+// Camera per scene: x,y pan (px), s zoom, r roll (rad); u = local time
+const CAM=[
+  u=>({x:-40*ease(u/8), y:0,  s:1+0.30*ease(u/8)+0.015*beat(u), r:0}),           // A slow push-in + drift
+  u=>({x:0, y:0, s:1.02+0.05*beat(u), r:0.035*Math.sin(u*0.9)}),                 // B iris: beat breathe + roll
+  u=>({x:-140*ease(u/14), y:0, s:1+0.22*ease(u/14)+0.01*beat(u), r:0}),          // C dolly across both lenses
+  u=>({x:140*Math.sin(u*0.45), y:0, s:1.06+0.12*ease(u/14), r:0}),               // D lateral track
+  u=>({x:0, y:-25*ease(u/6), s:1+0.22*ease(u/6)+0.015*beat(u), r:0}),           // E quick push onto subject
+  u=>({x:0, y:0, s:1.3-0.3*ease(u/7), r:-0.03*ease(u/7)})                         // F pull-back to bokeh
+];
+function drawCam(idx,u,ucam){
+  const c=CAM[idx](ucam);
+  g.save();
+  g.translate(W/2,H/2); g.rotate(c.r); g.scale(c.s,c.s); g.translate(-W/2+c.x,-H/2+c.y);
+  SC[idx][2](u);
+  g.restore();
+}
+
+// ---------- bilingual captions: [start, end, 中文, English] ----------
+const CAPS=[
+ [0,4.5,"你有没有想过：同一张照片里，为什么有的地方模糊，有的地方清晰？","Why is one part of a photo sharp while another melts into blur?"],
+ [4.5,8,"答案藏在镜头里的一扇小门。","The answer lies in a small door inside the lens."],
+ [8,14,"光圈，就是这扇门。门开得越大，进入的光越多。","The aperture is that door. The wider it opens, the more light gets in."],
+ [14,19,"f 数值越小，门开得越大。","A smaller f-number means a wider opening."],
+ [19,26,"对焦平面之外的光，不会汇聚成一个点，而是扩散成光斑。","Light from outside the focus plane never converges to a point. It spreads into a disc."],
+ [26,33,"门越大，光斑越大，背景就越模糊。","The wider the opening, the larger the disc, and the blurrier the background."],
+ [33,40,"门收得越小，光斑越小，清楚的范围就越宽。","Narrow the opening, and the zone of sharpness widens."],
+ [40,47,"景深，就是画面中看起来足够清楚的前后距离。","Depth of field is the range in front of and behind the subject that still looks sharp."],
+ [47,53,"镜头选择的不只是清晰，也是注视。","A lens chooses more than sharpness. It chooses what we attend to."],
+ [53,60,"此刻，你想让生活的哪一部分留在清晰里？","What part of your life do you want to keep in focus?"]
+];
+let lastCap=-2;
+function updateCaps(tt){
+  const i=CAPS.findIndex(c=>tt>=c[0]&&tt<c[1]);
+  if(i!==lastCap){
+    lastCap=i;
+    zhEl.textContent=i<0?'':CAPS[i][2];
+    enEl.textContent=i<0?'':CAPS[i][3];
+  }
+}
+
+// ---------- render ----------
+function render(tt){
+  T=tt;
+  let idx=SC.findIndex(s=>tt<s[1]);
+  if(idx<0) idx=SC.length-1;
+  const u=tt-SC[idx][0];
+  g.setTransform(1,0,0,1,0,0);
+  if(idx>0 && u<XF){
+    // short cross-dissolve from the previous scene's final frame
+    const d=SC[idx-1][1]-SC[idx-1][0];
+    GA=1; drawCam(idx-1,d,d);
+    GA=ease(u/XF);
+  } else GA=1;
+  drawCam(idx,u,u);
+  GA=1;
+  // light flash on each cut (beat-aligned: all cuts fall on whole beats)
+  if(idx>0 && u<0.12){
+    g.save();g.setTransform(1,0,0,1,0,0);g.globalAlpha=0.18*(1-u/0.12);g.fillStyle='#fff';g.fillRect(0,0,W,H);g.restore();
+  }
+  if(tt>58.5){
+    g.save();g.setTransform(1,0,0,1,0,0);g.globalAlpha=Math.min(1,(tt-58.5)/1.5);g.fillStyle='#000';g.fillRect(0,0,W,H);g.restore();
+  }
+  updateCaps(tt);
+  prog.style.width=(tt/DUR*100)+'%';
+  tlabel.textContent=tt.toFixed(1)+' / 60s';
+}
+
+// ---------- controls ----------
+function setPlaying(p){
+  playing=p;
+  btn.textContent=p?'❚❚ 暂停 / Pause':'▶ 播放 / Play';
+  if(p){
+    if(T>=DUR) T=0;
+    audio.currentTime=T;
+    audio.play().catch(()=>{});
+    lastNow=null;
+  } else {
+    audio.pause();
+  }
+}
+btn.onclick=()=>setPlaying(!playing);
+bar.onclick=ev=>{
+  const r=bar.getBoundingClientRect();
+  T=Math.max(0,Math.min(DUR,(ev.clientX-r.left)/r.width*DUR));
+  audio.currentTime=T;
+  render(T);
+};
+document.addEventListener('keydown',ev=>{if(ev.code==='Space'){ev.preventDefault();setPlaying(!playing);}});
+
+function loop(now){
+  if(playing){
+    if(!audio.paused && audio.currentTime>0) T=audio.currentTime;
+    else if(lastNow!==null) T+=(now-lastNow)/1000;
+    if(T>=DUR){T=DUR;setPlaying(false);}
+  }
+  lastNow=now;
+  render(T);
+  requestAnimationFrame(loop);
+}
+render(T);
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

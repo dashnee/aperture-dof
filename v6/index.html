@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>光圈 · 为什么焦外会糊 · v6</title>
+<style>
+html,body{margin:0;background:#060607;height:100%;overflow:hidden;font-family:"PingFang SC","Noto Sans SC","Microsoft YaHei",sans-serif}
+#wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
+canvas{width:min(100vw,calc(100vh*16/9));height:auto;aspect-ratio:16/9;display:block}
+#ui{position:fixed;left:0;right:0;bottom:6px;display:flex;gap:12px;justify-content:center;align-items:center;color:#7d776b;font-size:13px}
+button{background:none;border:1px solid #3a3730;color:#c9c0ad;padding:4px 14px;cursor:pointer;font:inherit}
+</style></head><body>
+<div id="wrap"><canvas id="c" width="1280" height="720"></canvas></div>
+<div id="ui"><button id="play">播放 / Play</button><span id="tl">0:00</span></div>
+<audio id="bgm" src="audio.m4a" preload="auto"></audio>
+<script>
+const cv=document.getElementById('c'),g=cv.getContext('2d');
+const W=1280,H=720,DUR=118;
+const PAPER='#e9dfcb',MUTE='#7d776b',GOLD='#e0b96a';
+const clamp=(x,a=0,b=1)=>Math.min(b,Math.max(a,x));
+const sm=x=>{x=clamp(x);return x*x*(3-2*x)};
+const env=(t,a,b,fi=0.6,fo=0.6)=>sm((t-a)/fi)*(1-sm((t-(b-fo))/fo));
+const lerp=(a,b,k)=>a+(b-a)*k;
+
+// ---------- thin-lens geometry (2D schematic, real ray construction) ----------
+const LX=660,YC=290,F=150,DF=330;           // lens x, optical axis y, focal length px, focus distance px
+const vOf=d=>1/(1/F-1/d);                    // image distance for object distance d
+const XS=LX+vOf(DF);                         // sensor sits where the focus distance images
+const DIAM=N=>F/N;                           // entrance pupil diameter
+
+function txt(s,x,y,size,color,a=1,align='left',weight=''){
+  if(a<=0.002)return; g.save();g.globalAlpha=a;g.fillStyle=color;
+  g.font=`${weight} ${size}px "PingFang SC","Noto Sans SC","Microsoft YaHei",sans-serif`;
+  g.textAlign=align;g.textBaseline='middle';g.fillText(s,x,y);g.restore();
+}
+function line(x1,y1,x2,y2,color,w,a=1){g.save();g.globalAlpha=a;g.strokeStyle=color;g.lineWidth=w;g.beginPath();g.moveTo(x1,y1);g.lineTo(x2,y2);g.stroke();g.restore();}
+// label with a dark backing plate so it stays readable over lines and dust
+function tag(s,x,y,size,color,a=1,align='left'){
+  if(a<=0.002)return; g.save();g.font=`${size}px "PingFang SC","Noto Sans SC","Microsoft YaHei",sans-serif`;
+  const w=g.measureText(s).width+14, h=size+10;
+  const x0= align==='center'? x-w/2 : align==='right'? x-w : x-7;
+  g.globalAlpha=a*0.82; g.fillStyle='#060607'; g.fillRect(x0,y-h/2,w,h);
+  g.restore(); txt(s,align==='center'?x:(align==='right'?x-7:x),y,size,color,a,align);
+}
+function glowDot(x,y,r,color,a){ if(a<=0.002)return; g.save();g.globalAlpha=a;
+  const gr=g.createRadialGradient(x,y,0,x,y,r);gr.addColorStop(0,color);gr.addColorStop(0.35,color.replace(/[\d.]+\)$/,'0.35)'));gr.addColorStop(1,'rgba(0,0,0,0)');
+  g.fillStyle=gr;g.beginPath();g.arc(x,y,r,0,Math.PI*2);g.fill();g.restore();}
+function bokehBG(t,k=1){ // distant dust with depth parallax, drifting with real motion
+  g.fillStyle='#060607';g.fillRect(0,0,W,H);
+  for(let i=0;i<46;i++){const z=((i*0.618)%1);const x=((i*211.7 - t*(18+40*z)*k)%(W+120)+W+120)%(W+120)-60;
+    const y=(i*97.3)%(H*0.8)+20+8*Math.sin(t*0.6+i);const r=1.5+z*16;const a=(0.05+0.07*(1-z))*k;
+    glowDot(x,y,r,`rgba(233,223,203,${a.toFixed(3)})`,1);}
+}
+// schematic optics: point sources through a thin lens onto the sensor
+function optics(o){
+  const D=DIAM(o.N), XSn=LX+vOf(DF)*1; const sens=[];
+  line(40,YC,1240,YC,PAPER,1,0.10);                        // optical axis
+  g.save();g.globalAlpha=0.5;g.fillStyle='#14151a';g.fillRect(LX-6,YC-D/2-30,12,D+60);g.restore(); // lens body
+  line(LX,YC-D/2-30,LX,YC+D/2+30,PAPER,1,0.25);
+  txt('透镜',LX,YC-D/2-46,16,MUTE,0.8*o.labA,'center');
+  g.save();g.globalAlpha=0.35;g.fillStyle=PAPER;g.fillRect(XS-2,YC-150,4,300);g.restore(); // sensor
+  txt('传感器',XS,YC+168,16,MUTE,0.9*o.labA,'center');
+  o.pts.forEach((p,idx)=>{
+    if(p.a<=0)return;
+    const xo=LX-p.d,yp=YC+p.h,v=vOf(p.d),xi=LX+v,yi=YC-p.h*v/p.d;
+    const k=o.p;                                           // ray progress 0..1
+    const edges=[YC-D/2,YC+D/2];
+    const ys=[];
+    edges.forEach(q=>{
+      // P -> lens edge
+      const ex=lerp(xo,LX,clamp(k*1.2)),ey=lerp(yp,q,clamp(k*1.2));
+      line(xo,yp,ex,ey,p.col,1.4,0.55*p.a);
+      // light pulse travelling along the ray (continuous motion)
+      { const q2=(k*1.2*0.8+ (NOW%2.4)/2.4)%1; const px=lerp(xo,LX,q2), py=lerp(yp,q, q2);
+        glowDot(px,py,5,p.col,0.8*p.a*k); }
+      if(k>0.6){ // lens -> image -> beyond to sensor
+        const kk=clamp((k-0.6)/0.4);
+        const xe=lerp(LX,XSn,kk), ye=q+(yi-q)*(xe-LX)/(xi-LX);
+        if(kk>0) line(LX,q,xe,ye,p.col,1.4,0.55*p.a);
+        ys.push(ye);
+      }
+    });
+    // chief ray through centre
+    if(k>0.6){ const kk=clamp((k-0.6)/0.4); const xe=lerp(LX,XSn,kk); const ye=YC+(yi-YC)*(xe-LX)/(xi-LX); line(LX,YC,xe,ye,p.col,1,0.3*p.a*kk); }
+    // object point
+    glowDot(xo,yp,10,p.col,p.a*0.9);
+    txt(p.lab,xo,yp-26,15,PAPER,0.8*p.a*o.labA,'center');
+    // blur disc on sensor (diameter from the two marginal rays)
+    if(k>0.6 && ys.length===2){
+      const dia=Math.max(2,Math.abs(ys[0]-ys[1]));
+      const cy=(ys[0]+ys[1])/2;
+      glowDot(XSn,cy,dia/2+2,p.col,p.a*(k-0.6)/0.4*0.9);
+      p.dia=dia;
+      if(o.showDia) tag(`弥散圆 ≈ ${Math.round(dia)} px`,XSn+26,cy+(idx-0.5)*36,14,PAPER,0.85*p.a*o.labA);
+    }
+  });
+}
+
+// ---------- iris: black body, only the aperture hole is light ----------
+const IX=430,IY=300,IRAD=230,RC=100;
+function holeRadius(th,N){ // wide open: near-circle; stopped down: hexagon formed by six blade edges
+  const d=170/N;
+  let m=-1e9; for(let k=0;k<6;k++) m=Math.max(m,Math.cos(th-k*Math.PI/3));
+  const poly=Math.min(RC, d/Math.max(m,0.0001));
+  const circ=Math.min(RC, d*1.05);
+  const b=sm((N-2.0)/1.0);           // 0 = round, 1 = hexagonal
+  return lerp(circ,poly,b);
+}
+function iris(N,cx=IX,cy=IY,label=true,rot=0){
+  const d=170/N;
+  g.save();
+  // everything outside the iris ring is pure black: clip to the blade housing first
+  g.beginPath();g.arc(cx,cy,IRAD,0,Math.PI*2);g.clip();
+  g.fillStyle='#000';g.fillRect(cx-IRAD,cy-IRAD,IRAD*2,IRAD*2);
+  // six black blades: each is a straight edge; draw them as black polygons covering the outside of the hole
+  g.beginPath();
+  for(let i=0;i<=240;i++){const th=i/240*Math.PI*2; const r=holeRadius(th-rot,N);
+    const x=cx+r*Math.cos(th),y=cy+r*Math.sin(th); i?g.lineTo(x,y):g.moveTo(x,y);}
+  g.closePath();
+  const gr=g.createRadialGradient(cx,cy,0,cx,cy,RC);
+  gr.addColorStop(0,'#fff4d6');gr.addColorStop(0.7,'#e9d29a');gr.addColorStop(1,'#b48a46');
+  g.fillStyle=gr;g.fill();
+  g.restore();
+  g.save();g.strokeStyle='#050505';g.lineWidth=5;g.beginPath();g.arc(cx,cy,IRAD,0,Math.PI*2);g.stroke();g.restore();
+}
+// starburst from diffraction at straight blade edges: 6 blades -> 6 spikes
+function starburst(cx,cy,N,a){
+  const vis=sm((N-1.7)/1.8)*a, len=60+150*sm((N-1.5)/2.5);
+  glowDot(cx,cy,60,'rgba(255,240,205,0.9)',a);
+  if(vis<=0.002)return;
+  g.save();g.globalCompositeOperation='lighter';
+  for(let k=0;k<6;k++){const th=k*Math.PI/3+0.2;
+    const gr=g.createLinearGradient(cx,cy,cx+Math.cos(th)*len,cy+Math.sin(th)*len);
+    gr.addColorStop(0,`rgba(255,240,205,${0.9*vis})`);gr.addColorStop(1,'rgba(255,240,205,0)');
+    g.strokeStyle=gr;g.lineWidth=2.2;g.beginPath();g.moveTo(cx,cy);g.lineTo(cx+Math.cos(th)*len,cy+Math.sin(th)*len);g.stroke();
+    g.beginPath();g.moveTo(cx,cy);g.lineTo(cx-Math.cos(th)*len,cy-Math.sin(th)*len);g.stroke();}
+  g.restore();
+}
+
+// ---------- script ----------
+const CAP=[
+ [0.0,8.0,'远处的一个光点，为什么有时清楚，有时是一团？','Why does a distant point of light sometimes blur into a blob?'],
+ [8.0,26.0,'光从一点出发，经过透镜，会重新会聚回一点。','Light from one point, through a lens, converges back to one point.'],
+ [26.0,46.0,'焦点之外的光点，会在传感器上变成一个圆斑。','Points off the focus plane land on the sensor as a disc.'],
+ [46.0,60.0,'圆斑大到一定程度，就能看出是模糊的。','Once the disc is large enough, the blur becomes visible.'],
+ [60.0,72.0,'怎样让焦外的圆变小？','How can we shrink that disc?'],
+ [72.0,90.0,'光圈：只有中间的孔透光，叶片是黑色的。','Aperture: only the hole passes light; the blades stay black.'],
+ [90.0,102.0,'收小光圈，孔的形状由六片叶片的边决定。','Stopping down, the hole takes the shape of the six blade edges.'],
+ [102.0,113.0,'星芒来自叶片边缘的衍射：六片叶片，六条主光芒。','Starbursts come from diffraction at blade edges: six blades, six main rays.'],
+ [113.0,118.0,'清楚，是有边界的。','Sharpness has a boundary.'],
+];
+function caption(t){
+  for(const [a,b,zh,en] of CAP){ if(t>=a&&t<b){ const al=env(t,a,b,0.4,0.4);
+    g.save();g.fillStyle='rgba(0,0,0,0.5)';g.globalAlpha=al;g.fillRect(0,H-96,W,96);g.restore();
+    txt(zh,W/2,H-62,30,PAPER,al,'center');txt(en,W/2,H-28,20,MUTE,al,'center');}}
+}
+
+function s1(t){ // focusing: one point, sharp; point drifts slightly so rays keep moving
+  const p=[{d:DF+14*Math.sin(t*0.5),h:4*Math.sin(t*0.9),a:env(t,8,27,0.8,0.8),col:'rgba(255,236,190,1)',lab:'光点'}];
+  optics({N:1.48,df:DF,pts:p,p:sm((t-8)/6),labA:1,showDia:false});
+}
+function s2(t){ // focus + near + far points, wide aperture; near/far keep drifting
+  const a=env(t,26,47,0.6,0.6);
+  const pts=[{d:DF,h:0,a:a,col:'rgba(255,236,190,1)',lab:'焦点上'},
+             {d:220+10*Math.sin(t*0.7),h:-40+6*Math.sin(t*0.8),a:a,col:'rgba(245,200,120,1)',lab:'近处'},
+             {d:520+18*Math.sin(t*0.6),h:40+6*Math.cos(t*0.7),a:a,col:'rgba(245,200,120,1)',lab:'远处'}];
+  optics({N:1.48,df:DF,pts,p:sm((t-26)/5),labA:a,showDia:true});
+}
+function s3(t){ // blur vs distance
+  const a=env(t,46,61,0.6,0.6); const x0=140,x1=1140,y0=560,ytop=130;
+  line(x0,y0,x1,y0,PAPER,1,0.4*a); line(x0,y0,x0,ytop,PAPER,1,0.4*a);
+  txt('距离（偏离焦点）→',x1,y0+22,16,MUTE,a,'right');
+  txt('模糊圆 ↑ px',x0,ytop-20,16,MUTE,a,'left');
+  const maxB=60, Dd=DIAM(1.48);
+  const X=d=>x0+(d-180)/440*(x1-x0), Y=b=>y0-Math.min(b,maxB)/maxB*(y0-ytop);
+  // threshold (assumed visibility limit, illustrative)
+  const TH=3; line(x0,Y(TH),x1,Y(TH),GOLD,1.2,0.7*a); txt('假设的可见阈值 ≈ 3 px（示意）',x1-6,Y(TH)-14,14,GOLD,a,'right');
+  const k=sm((t-48)/8);
+  // a travelling marker walks the curve continuously so the graph is never static
+  const sweep=180+440*(0.5+0.5*Math.sin((t-48)*0.35));
+  { const v=vOf(sweep), b=Dd*Math.abs(vOf(DF)-v)/v;
+    glowDot(X(sweep),Y(b),7,'rgba(255,240,205,1)',a*0.9);
+    tag(`${Math.round(sweep)} 距离 · ${Math.round(b)} px`,X(sweep),Y(b)-26,15,PAPER,a*0.9,'center'); }
+  g.save();g.globalAlpha=a;g.strokeStyle=PAPER;g.lineWidth=2;g.beginPath();
+  for(let i=0;i<=200;i++){const d=180+ (440*i/200)*k; if(d>620)break;
+    const v=vOf(d); const b=Dd*Math.abs(vOf(DF)-v)/v; const x=X(d),y=Y(b); i?g.lineTo(x,y):g.moveTo(x,y);} g.stroke();g.restore();
+  // sample points with disc thumbnails
+  [[220,'近'],[330,'焦点'],[520,'远']].forEach(([d,lab],i)=>{
+    const v=vOf(d), b=Dd*Math.abs(vOf(DF)-v)/v; const x=X(d);
+    const al=a*sm((t-52-i*2)/1.2);
+    glowDot(x,Y(b),Math.max(3,b*0.5),'rgba(245,215,150,1)',al*0.9);
+    txt(`${lab} ${Math.round(b)} px`,x,y0+52,16,PAPER,al,'center');
+  });
+}
+function s4(t){ // the question
+  const a=env(t,60,73,0.8,0.8);
+  txt('问题：怎样让焦外的圆变小？',W/2,300,40,PAPER,a,'center','');
+  txt('答：让进入镜头的光束变窄——这就是光圈。',W/2,372,28,GOLD,env(t,62,73,0.8,0.8),'center');
+}
+function s5(t){ // iris reveal and what it does to the disc
+  const a=env(t,72,91,0.8,0.8);
+  // continuous breathing on top of the stepped change, so the iris is never frozen
+  const Nn=(t<84? (t<76?1.48:lerp(1.48,4,sm((t-76)/8))) : lerp(4,2.8,sm((t-84)/4))) + 0.08*Math.sin(t*1.7);
+  iris(Nn,IX,IY,true,0.0);
+  txt(`f/${Nn.toFixed(2)}`,IX,IY+IRAD+40,24,PAPER,a,'center');
+  const dia=0.42*DIAM(Nn)*1.0;
+  txt('同一个远处光点的焦外圆：',860,200,22,PAPER,a);
+  g.save();g.globalAlpha=a;const gr=g.createRadialGradient(950,330,0,950,330,dia+4);
+  gr.addColorStop(0,'rgba(245,215,150,1)');gr.addColorStop(1,'rgba(0,0,0,0)');g.fillStyle=gr;g.beginPath();g.arc(950,330,dia+4,0,Math.PI*2);g.fill();g.restore();
+  txt(`直径 ≈ ${Math.round(dia*2)} px`,950,430,18,PAPER,a,'center');
+  txt('光圈收小，焦外圆就随之变小。',860,500,20,MUTE,a);
+}
+function s6(t){ // blades: sweep through apertures, hole shape evolves
+  const a=env(t,90,103,0.8,0.8);
+  const N=(t<96? lerp(1.48,4,sm((t-90)/6)) : lerp(4,1.48,sm((t-96)/6))) + 0.35*Math.sin(t*2.3);
+  iris(N,IX,IY,true,(t-90)*0.12+0.05*Math.sin(t*0.9));
+  txt(`f/${N.toFixed(2)}`,IX,IY+IRAD+40,24,PAPER,a,'center');
+  txt('6 片叶片 · 6 条边',860,220,26,PAPER,a);
+  txt('孔只能是多边形或圆，由叶片的边界决定',860,262,20,MUTE,a);
+  txt('f/1.48 时孔是圆的；收小后才出现六边形。',860,320,20,MUTE,a);
+}
+function s7(t){ // starburst versus f-number
+  const a=env(t,102,114,0.8,0.8);
+  const N=lerp(1.48,4,sm((t-104)/7)) + 0.3*Math.sin(t*1.9);
+  iris(N,IX,IY,false,0.2+0.1*Math.sin(t*0.8));
+  starburst(930,205,N,a);
+  txt(`f/${N.toFixed(2)}`,930,420,24,PAPER,a,'center');
+  txt('光圈变化主要改变星芒的清晰度与长度',930,462,20,MUTE,a,'center');
+  txt('条数由叶片数决定：六片叶片，六条主光芒',930,494,18,MUTE,a,'center');
+}
+function s8(t){ // echo of the opening
+  const a=env(t,113,118,0.8,0.8);
+  optics({N:1.48,df:DF,pts:[{d:DF,h:0,a:a,col:'rgba(255,236,190,1)',lab:''}],p:1,labA:a,showDia:false});
+}
+
+let NOW=0;
+function render(t){
+  NOW=t; g.setTransform(1,0,0,1,0,0);
+  bokehBG(t,1);
+  if(t<8){ // hook: a single light, slow brightening
+    const a=env(t,0,8,1.2,1.0); glowDot(640,300,40+20*a,'rgba(255,236,190,1)',0.2+0.6*a);
+  }
+  if(t>=8&&t<26) s1(t);
+  if(t>=26&&t<47) s2(t);
+  if(t>=46&&t<61) s3(t);
+  if(t>=60&&t<74) s4(t);
+  if(t>=72&&t<92) s5(t);
+  if(t>=90&&t<104) s6(t);
+  if(t>=102&&t<115) s7(t);
+  if(t>=113) s8(t);
+  caption(t);
+  document.getElementById('tl').textContent=`${Math.floor(t/60)}:${String(Math.floor(t%60)).padStart(2,'0')} / ${DUR}s`;
+}
+window.renderAt=render; // exposed for deterministic frame capture
+const audio=document.getElementById('bgm'), btn=document.getElementById('play');
+let playing=false,T=0,last=null;
+function loop(now){
+  if(playing){
+    const dt=last===null?0:(now-last)/1000;
+    if(!audio.paused && audio.currentTime>0) T=audio.currentTime; else T+=dt;
+    if(T>=DUR){T=DUR;playing=false;audio.pause();btn.textContent='播放 / Play';}
+  }
+  last=now; render(T); requestAnimationFrame(loop);
+}
+function setPlaying(p){ playing=p; btn.textContent=p?'暂停 / Pause':'播放 / Play'; if(p){ if(T>=DUR)T=0; audio.currentTime=T; audio.play().catch(()=>{}); } else audio.pause(); }
+btn.onclick=()=>setPlaying(!playing);
+const qp=new URLSearchParams(location.search);
+const ui=document.getElementById('ui');
+if(qp.has('t')){ ui.style.display='none'; T=+qp.get('t'); render(T); }
+else {
+  // controls fade out during playback so they never sit on top of captions
+  let idleTimer=null;
+  const wake=()=>{ui.style.opacity='1';clearTimeout(idleTimer);idleTimer=setTimeout(()=>{if(playing)ui.style.opacity='0';},2000);};
+  document.addEventListener('mousemove',wake); ui.style.transition='opacity .4s';
+  render(0); requestAnimationFrame(loop);
+}
+</script></body></html>

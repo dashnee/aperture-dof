@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>光圈 · 为什么焦外会糊 · v8</title>
+<style>
+html,body{margin:0;background:#060607;height:100%;overflow:hidden;font-family:"PingFang SC","Noto Sans SC","Microsoft YaHei",sans-serif}
+#wrap{position:fixed;inset:0;display:flex;align-items:center;justify-content:center}
+canvas#c{width:min(100vw,calc(100vh*16/9));height:auto;aspect-ratio:16/9;display:block}
+#ov{position:absolute;pointer-events:none}
+#ui{position:fixed;left:0;right:0;bottom:6px;display:flex;gap:12px;justify-content:center;align-items:center;color:#7d776b;font-size:13px;transition:opacity .4s}
+button{background:none;border:1px solid #3a3730;color:#c9c0ad;padding:4px 14px;cursor:pointer;font:inherit}
+</style>
+<script type="importmap">{"imports":{"three":"./lib/three.module.js"}}</script>
+</head><body>
+<div id="wrap"><canvas id="c" width="1280" height="720"></canvas><canvas id="ov" width="1280" height="720"></canvas></div>
+<div id="ui"><button id="play">播放 / Play</button><span id="tl">0:00</span></div>
+<audio id="bgm" src="audio.m4a" preload="auto"></audio>
+<script type="module">
+import * as THREE from 'three';
+
+// palette / line language carried over from v6-v7
+const PAPER='#e9dfcb', MUTE='#7d776b', INK='#060607';
+const DUR=118, W=1280, H=720;
+const clamp=(x,a=0,b=1)=>Math.min(b,Math.max(a,x));
+const sm=x=>{x=clamp(x);return x*x*(3-2*x)};
+const lerp=(a,b,k)=>a+(b-a)*k;
+const env=(t,a,b,fi=0.6,fo=0.6)=>sm((t-a)/fi)*(1-sm((t-(b-fo))/fo));
+
+// ---------- 3D layer ----------
+const cv=document.getElementById('c');
+const renderer=new THREE.WebGLRenderer({canvas:cv,antialias:true,preserveDrawingBuffer:true});
+renderer.setPixelRatio(1); renderer.setSize(W,H,false);
+renderer.setClearColor(INK,1);
+renderer.toneMapping=THREE.ACESFilmicToneMapping; renderer.toneMappingExposure=0.95;
+const scene=new THREE.Scene(); scene.background=new THREE.Color(INK);
+const cam=new THREE.PerspectiveCamera(30,W/H,0.1,200);
+
+// ---------- 2D overlay ----------
+const ov=document.getElementById('ov'), og=ov.getContext('2d');
+function txt(s,x,y,size,color,a=1,align='left',weight=''){
+  if(a<=0.002)return; og.save(); og.globalAlpha=a; og.fillStyle=color;
+  og.font=`${weight} ${size}px "PingFang SC","Noto Sans SC","Microsoft YaHei",sans-serif`;
+  og.textAlign=align; og.textBaseline='middle'; og.fillText(s,x,y); og.restore();
+}
+function tag(s,x,y,size,color,a=1){
+  if(a<=0.002)return; og.save(); og.font=`${size}px "PingFang SC","Noto Sans SC","Microsoft YaHei",sans-serif`;
+  const w=og.measureText(s).width+14,h=size+10;
+  og.globalAlpha=a*0.82; og.fillStyle=INK; og.fillRect(x-w/2,y-h/2,w,h); og.restore();
+  txt(s,x,y,size,color,a,'center');
+}
+
+// ---------- lights ----------
+const key=new THREE.DirectionalLight(0xfff1dc,1.2); key.position.set(-4,5,6); scene.add(key);
+const rim=new THREE.DirectionalLight(0x9fb4c8,0.9); rim.position.set(5,2,-4); scene.add(rim);
+scene.add(new THREE.AmbientLight(0x3a3630,0.7));
+
+// ---------- iris ----------
+// Real mechanism (checked): each blade pivots on a pin near the housing; an actuator pin in a slot
+// drives it; blade edges move inward and the hole becomes a polygon with one side per blade.
+// Modelled here: six straight blade edges at normal angles phi_k; edge distance a(N) shrinks as N rises.
+const IRIS_R=2.62, RC=IRIS_R*0.94, RP=IRIS_R*1.02;   // housing opening, hole cap, pivot pitch radius
+const iris=new THREE.Group(); scene.add(iris);
+const PHI=[0,1,2,3,4,5].map(k=>k*Math.PI/3);
+const openR=N=>1.9*1.48/N;                              // edge distance a(N), same family as v7
+
+// light: the hole itself. Radius = min(RC, a / max_k cos(theta-phi_k)) -> polygon when closed, round when open.
+const holeMesh=new THREE.Mesh(new THREE.BufferGeometry(),new THREE.MeshBasicMaterial({color:0xf3e3bd}));
+holeMesh.position.z=-0.05; iris.add(holeMesh);
+const glowMesh=new THREE.Mesh(new THREE.CircleGeometry(RC*1.08,96),new THREE.MeshBasicMaterial({color:0xf1d9a0,transparent:true,opacity:0.18,depthWrite:false}));
+glowMesh.position.z=-0.06; iris.add(glowMesh);
+
+// blades: body region between edge distance a and a+w, pivot pin marked at one end on the pitch circle
+const bladeMat=new THREE.MeshStandardMaterial({color:0x1d1c19,roughness:0.36,metalness:0.55,side:THREE.DoubleSide});
+const edgeMat=new THREE.LineBasicMaterial({color:0xf3e6cc});
+const blades=PHI.map((phi,k)=>{
+  const body=new THREE.Mesh(new THREE.BufferGeometry(),bladeMat); body.position.z=0.1+k*0.03; iris.add(body);
+  const edge=new THREE.Line(new THREE.BufferGeometry(),edgeMat); edge.position.z=0.2+k*0.03; iris.add(edge);
+  const pin=new THREE.Mesh(new THREE.CircleGeometry(0.07,16),new THREE.MeshBasicMaterial({color:0xe9dfcb}));
+  pin.position.z=0.22+k*0.03; iris.add(pin);
+  return {phi,body,edge,pin};
+});
+// housing: opaque black ring in front, hides blade bodies beyond the opening
+const housing=new THREE.Mesh(new THREE.RingGeometry(IRIS_R,3.3,128),new THREE.MeshStandardMaterial({color:0x0b0b0b,roughness:0.55,metalness:0.4,side:THREE.DoubleSide}));
+housing.position.z=0.5; iris.add(housing);
+const outline=new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(Array.from({length:160},(_,i)=>{const a=i/160*Math.PI*2;return new THREE.Vector3(Math.cos(a)*IRIS_R,Math.sin(a)*IRIS_R,0.51)})),
+  new THREE.LineBasicMaterial({color:0xe9dfcb,transparent:true,opacity:0.4}));
+iris.add(outline);
+
+// starburst: diffraction along each blade-edge normal, both directions (6 blades -> 6 spikes, per the optics rule)
+const spikes=PHI.map(phi=>{
+  const m=new THREE.Mesh(new THREE.PlaneGeometry(1,0.07),new THREE.MeshBasicMaterial({color:0xfff7e0,transparent:true,opacity:0,depthWrite:false,side:THREE.DoubleSide}));
+  m.position.z=0.6; m.rotation.z=phi; iris.add(m); return m;
+});
+
+function edgePts(phi,a){
+  const n=[Math.cos(phi),Math.sin(phi)], t=[-Math.sin(phi),Math.cos(phi)];
+  const Lh=Math.sqrt(Math.max(RP*RP-a*a,0.01)), w=0.55;
+  const p=(s,d)=>[n[0]*d+t[0]*s, n[1]*d+t[1]*s];
+  return {p0:p(-Lh,a), p1:p(Lh,a), p2:p(Lh,a+w), p3:p(-Lh,a+w), tip:p(Lh,a)};
+}
+function holeRadius(theta,a){
+  let m=-1e9; for(const phi of PHI) m=Math.max(m,Math.cos(theta-phi));
+  return Math.min(RC, a/Math.max(m,0.0001));
+}
+function setIris(N,t){
+  const a=openR(N);
+  const pts=[]; for(let i=0;i<=180;i++){const th=i/180*Math.PI*2; const r=holeRadius(th,a); pts.push(new THREE.Vector2(Math.cos(th)*r,Math.sin(th)*r));}
+  holeMesh.geometry.dispose(); holeMesh.geometry=new THREE.ShapeGeometry(new THREE.Shape(pts));
+  glowMesh.scale.setScalar(Math.max(0.2,Math.min(1,a/1.9)));
+  blades.forEach(({phi,body,edge,pin})=>{
+    const e=edgePts(phi,a);
+    const shape=new THREE.Shape([new THREE.Vector2(...e.p0),new THREE.Vector2(...e.p1),new THREE.Vector2(...e.p2),new THREE.Vector2(...e.p3)]);
+    body.geometry.dispose(); body.geometry=new THREE.ShapeGeometry(shape);
+    edge.geometry.dispose(); edge.geometry=new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...e.p0,0),new THREE.Vector3(...e.p1,0)]);
+    pin.position.set(...e.tip,0.0);
+  });
+  const vis=clamp((3.6-N)/1.1);
+  spikes.forEach((m)=>{
+    m.scale.set(1.2+2.1*vis,1,1); m.position.x=0; m.position.y=0;
+    m.material.opacity=0.9*vis; m.visible=vis>0.01;
+  });
+}
+
+// ---------- optics (thin lens) ----------
+const F=1.6, RPL=1.25;
+const DF=4.0, VF=F*DF/(DF-F);
+const ZS=-VF;
+const optics=new THREE.Group(); scene.add(optics);
+const lens=new THREE.Mesh(new THREE.CylinderGeometry(1.9,1.9,0.14,96),new THREE.MeshStandardMaterial({color:0x2a2c33,transparent:true,opacity:0.45,roughness:0.12,metalness:0.25}));
+lens.rotation.x=Math.PI/2; optics.add(lens);
+const lensRim=new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(Array.from({length:128},(_,i)=>{const a=i/128*Math.PI*2;return new THREE.Vector3(Math.cos(a)*1.9,Math.sin(a)*1.9,0.08)})),
+  new THREE.LineBasicMaterial({color:0xe9dfcb,transparent:true,opacity:0.35}));
+optics.add(lensRim);
+const sensor=new THREE.Mesh(new THREE.PlaneGeometry(4.0,2.6),new THREE.MeshBasicMaterial({color:0x14161b,side:THREE.DoubleSide}));
+sensor.position.z=ZS; optics.add(sensor);
+const sensorEdge=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.PlaneGeometry(4.0,2.6)),new THREE.LineBasicMaterial({color:0xe9dfcb,transparent:true,opacity:0.5}));
+sensorEdge.position.z=ZS+0.01; optics.add(sensorEdge);
+const POINTS=[
+  {d:DF, h:0.0,  col:0xfff0cd, label:'焦点上'},
+  {d:2.2,h:-0.7, col:0xf2c77a, label:'近处'},
+  {d:8.0,h:0.9,  col:0xf2c77a, label:'远处'},
+];
+const pointMeshes=POINTS.map(p=>{
+  const m=new THREE.Mesh(new THREE.SphereGeometry(0.09,24,16),new THREE.MeshBasicMaterial({color:0x3a3630}));
+  m.position.set(0,p.h,p.d); optics.add(m); return m;
+});
+const rayGroup=new THREE.Group(); scene.add(rayGroup);
+const spotGroup=new THREE.Group(); optics.add(spotGroup);
+
+// light schedule: one point at a time; each lights at its start time
+const LIGHT=[ {i:2,start:0,end:8}, {i:0,start:8,end:26}, {i:1,start:26,end:38}, {i:2,start:38,end:50}, {i:0,start:50,end:72} ];
+function lightAt(t){ for(const L of LIGHT){ if(t>=L.start&&t<L.end) return L; } return null; }
+function trace(P){
+  const v=F*P.d/(P.d-F), mag=-v/P.d, yQ=P.h*mag, zQ=-v, s=ZS/zQ;
+  return {v,yQ,zQ,s,spotD:2*RPL*Math.abs(1-s),spotY:yQ*s,endY:(yQ*s)};
+}
+const mkLine=(pts,color,op)=>new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),new THREE.LineBasicMaterial({color,transparent:true,opacity:op}));
+function buildOptics(t){
+  rayGroup.clear(); spotGroup.clear();
+  const L=lightAt(t);
+  POINTS.forEach((p,i)=>pointMeshes[i].material.color.setHex(L&&L.i===i?p.col:0x3a3630));
+  if(!L) return null;
+  const P=POINTS[L.i], tr=trace(P), col=P.col;
+  const pt=new THREE.Vector3(0,P.h,P.d);
+  const pr=clamp((t-L.start)/3);                      // rays draw in over 3 s
+  const seg=(a,b,k)=>new THREE.Vector3().lerpVectors(a,b,clamp(k));
+  for(const sgn of [1,-1]){
+    const E=new THREE.Vector3(0,sgn*RPL,0);
+    const Sn=new THREE.Vector3(0,tr.spotY,ZS);
+    rayGroup.add(mkLine([pt,seg(pt,E,pr*2)],col,0.75));
+    if(pr>0.5) rayGroup.add(mkLine([E,seg(E,Sn,pr*2-1)],col,0.75));
+  }
+  const C=new THREE.Vector3(0,0,0), Cs=new THREE.Vector3(0,tr.yQ*tr.s,ZS);
+  rayGroup.add(mkLine([pt,seg(pt,C,pr*2)],col,0.35));
+  if(pr>0.5) rayGroup.add(mkLine([C,seg(C,Cs,pr*2-1)],col,0.35));
+  if(pr>0.9){
+    const r=Math.max(tr.spotD/2,0.05);
+    const spot=new THREE.Mesh(new THREE.CircleGeometry(r,48),new THREE.MeshBasicMaterial({color:col,transparent:true,opacity:0.95,depthWrite:false}));
+    spot.position.set(0,tr.spotY,ZS+0.012); spotGroup.add(spot);
+    if(tr.spotD<0.05){ const ring=new THREE.Mesh(new THREE.RingGeometry(0.11,0.13,48),new THREE.MeshBasicMaterial({color:0xfff0cd,transparent:true,opacity:0.9,depthWrite:false})); ring.position.set(0,0,ZS+0.02); spotGroup.add(ring); }
+  }
+  // continuous light pulses along both marginal paths, so the diagram never freezes
+  const ph=((t*0.35)%1);
+  for(const sgn of [1,-1]){
+    const E=new THREE.Vector3(0,sgn*RPL,0), Sn=new THREE.Vector3(0,E.y+(tr.yQ-E.y)*tr.s,ZS);
+    const q= ph<0.5 ? new THREE.Vector3().lerpVectors(pt,E,ph*2) : new THREE.Vector3().lerpVectors(E,Sn,(ph-0.5)*2);
+    const dot=new THREE.Mesh(new THREE.SphereGeometry(0.09,12,8),new THREE.MeshBasicMaterial({color:col}));
+    dot.position.copy(q); rayGroup.add(dot);
+  }
+  return {P,tr,L};
+}
+
+// ---------- camera: fast swings across the lens, slow holds while the reader reads ----------
+// optics: orbit angle around the lens (0 = object side, 90 = lens edge-on). Sweeps are the 2.5 s moves at each light.
+const OPTK=[[0,35],[1.5,35],[3.2,100],[7.2,100],[8.2,35],[9.5,35],[11.0,110],[24.5,110],[26.0,-30],[27.5,-30],[29.2,-100],[36.0,-100],[37.5,35],[49.0,35],[50.5,-110],[70.0,-110],[71.0,35]];
+// iris: front, 45-degree (approximate, not exact) view, back to front, then a slow calm pull-back
+const IRK=[[71,0],[89,0],[91,45],[101,45],[103,0],[118,0]];
+const IRR=[[71,14],[112,14],[118,16.5]];
+function sampleKeys(K,t){
+  if(t<=K[0][0]) return K[0][1];
+  for(let i=0;i<K.length-1;i++){
+    const [t0,v0]=K[i],[t1,v1]=K[i+1];
+    if(t>=t0&&t<=t1) return lerp(v0,v1,sm((t-t0)/(t1-t0)));
+  }
+  return K[K.length-1][1];
+}
+function camAt(t){
+  if(t<72){
+    const th=sampleKeys(OPTK,t)*Math.PI/180+0.02*Math.sin(t*0.25);      // slow drift during holds
+    const R=13.0, H3=2.4, Zt=0.6;
+    cam.position.set(R*Math.sin(th), H3, Zt+R*Math.cos(th));
+    cam.lookAt(0,0,Zt);
+  } else {
+    const th=sampleKeys(IRK,t)*Math.PI/180;
+    const R=sampleKeys(IRR,t);
+    cam.position.set(R*Math.sin(th), 0.25, R*Math.cos(th));
+    cam.lookAt(0,0,0);
+  }
+}
+
+// f-number schedule: calm holds at 1.48 and 2.8, the blade sweeps in between
+function fAt(t){
+  if(t<76) return 1.48;
+  if(t<84) return lerp(1.48,4,sm((t-76)/8));
+  if(t<90) return lerp(4,2.8,sm((t-84)/6));
+  if(t<96) return lerp(2.8,1.48,sm((t-90)/6));
+  if(t<102) return lerp(1.48,4,sm((t-96)/6));
+  if(t<112) return lerp(4,2.8,sm((t-102)/10));
+  return 2.8;
+}
+
+// ---------- captions ----------
+const CAP=[
+ [0.0,8.0,'远处的一个光点，为什么有时清楚，有时是一团？','Why does a distant point of light sometimes blur into a blob?'],
+ [8.0,26.0,'光从一点出发，经过透镜，会重新会聚回一点。','Light from one point, through a lens, converges back to one point.'],
+ [26.0,46.0,'焦点之外的光点，会在传感器上变成一个圆斑。','Points off the focus plane land on the sensor as a disc.'],
+ [46.0,60.0,'圆斑大到一定程度，就能看出是模糊的。','Once the disc is large enough, the blur becomes visible.'],
+ [60.0,72.0,'怎样让焦外的圆变小？','How can we shrink that disc?'],
+ [72.0,90.0,'光圈：只有中间的孔透光，叶片是黑色的。','Aperture: only the hole passes light; the blades stay black.'],
+ [90.0,102.0,'叶片绕转轴转动，孔就变成多边形。','Blades pivot on pins; the hole becomes a polygon.'],
+ [102.0,113.0,'六片叶片，六条主光芒：星芒来自叶片边缘的衍射。','Six blades, six main rays: starbursts come from diffraction at blade edges.'],
+ [113.0,118.0,'清楚，是有边界的。','Sharpness has a boundary.'],
+];
+function caption(t){
+  for(const [a,b,zh,en] of CAP){ if(t>=a&&t<b){ const al=env(t,a,b,0.6,0.6);
+    og.save(); og.fillStyle='rgba(6,6,7,0.55)'; og.globalAlpha=al; og.fillRect(0,H-96,W,96); og.restore();
+    txt(zh,W/2,H-62,30,PAPER,al,'center'); txt(en,W/2,H-28,20,MUTE,al,'center'); }}
+}
+
+// ---------- frame ----------
+function render(t){
+  camAt(t);
+  const irisOn=t>=72;
+  iris.visible=irisOn; optics.visible=!irisOn; rayGroup.visible=!irisOn;
+  if(irisOn) setIris(fAt(t),t); else buildOptics(t);
+  renderer.render(scene,cam);
+  og.setTransform(1,0,0,1,0,0); og.clearRect(0,0,W,H);
+  caption(t);
+  if(irisOn){ const N=fAt(t); tag(`f/${N.toFixed(2)}`,W/2,H-120,22,PAPER,env(t,72,114,0.8,0.8)); }
+  else { const r=buildOptics(t); if(r){ tag(`${r.P.label}  弥散圆 ≈ ${(r.tr.spotD*100).toFixed(0)}（示意）`,W/2,H-120,18,PAPER,0.9); } }
+  document.getElementById('tl').textContent=`${Math.floor(t/60)}:${String(Math.floor(t%60)).padStart(2,'0')} / ${DUR}s`;
+}
+function fitOverlay(){ const r=cv.getBoundingClientRect(); ov.style.left=r.left+'px'; ov.style.top=r.top+'px'; ov.style.width=r.width+'px'; ov.style.height=r.height+'px'; }
+window.addEventListener('resize',fitOverlay); fitOverlay();
+
+// ---------- playback ----------
+const audio=document.getElementById('bgm'), btn=document.getElementById('play');
+let playing=false,T=0,last=null;
+function loop(now){
+  if(playing){
+    const dt=last===null?0:(now-last)/1000;
+    if(!audio.paused && audio.currentTime>0) T=audio.currentTime; else T+=dt;
+    if(T>=DUR){T=DUR;playing=false;audio.pause();btn.textContent='播放 / Play';}
+  }
+  last=now; render(T); requestAnimationFrame(loop);
+}
+function setPlaying(p){ playing=p; btn.textContent=p?'暂停 / Pause':'播放 / Play'; if(p){ if(T>=DUR)T=0; audio.currentTime=T; audio.play().catch(()=>{}); } else audio.pause(); }
+btn.onclick=()=>setPlaying(!playing);
+const qp=new URLSearchParams(location.search);
+if(qp.has('t')){ document.getElementById('ui').style.display='none'; T=+qp.get('t'); render(T); }
+else { render(0); requestAnimationFrame(loop); }
+window.renderAt=render;
+</script></body></html>

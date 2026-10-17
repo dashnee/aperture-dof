@@ -15,8 +15,6 @@
   #stage{position:relative;width:1080px;height:1920px;background:var(--bg);overflow:hidden;font-family:var(--sans);color:var(--ink);transform-origin:0 0}
   .glow{position:absolute;inset:0;background:radial-gradient(600px 700px at 50% 45%,rgba(240,85,58,.22),transparent 70%);opacity:.8}
   .progress{position:absolute;top:0;left:0;height:6px;background:var(--acc);width:0}
-  .spec{position:absolute;bottom:60px;left:60px;width:360px;padding:18px 20px;border:1px solid #2a2622;background:rgba(20,18,17,.7);font:600 20px/1.6 var(--mono);opacity:0;z-index:5}
-  .spec b{color:var(--acc);font-weight:600}
   .scene{position:absolute;inset:0;opacity:0;pointer-events:none}
   .lbl{position:absolute;font:500 22px var(--mono);letter-spacing:.2em;color:var(--mute)}
   .abs{position:absolute}
@@ -49,13 +47,6 @@
 <div id="stage">
   <div class="glow"></div>
   <div class="progress" id="prog"></div>
-  <div class="spec" id="spec">
-    <div>模型 <b>Claude Haiku 5.5</b></div>
-    <div>推理强度 <b>xhigh</b></div>
-    <div>分辨率 <b>1080 × 1920</b></div>
-    <div>码率 <b>3.79 Mbps</b></div>
-    <div>本次消耗 Tokens <b>260,628</b></div>
-  </div>
 
   <!-- S1  0–5s : 圆点 → 菱形 → Haiku 3.7 → 5.5 -->
   <div class="scene" id="s1">
@@ -157,8 +148,6 @@ function frame(t){
     const fi = seg(t,a,a+0.3,ease.io), fo = 1-seg(t,b-0.3,b,ease.io);
     el.style.opacity = (t<a||t>=b)?0:Math.min(fi,fo);
   });
-  // 规格面板：S1 之后出现，S2 之后可见
-  $("spec").style.opacity = seg(t,0.8,1.6);
 
   /* ---- S1 ---- */
   // 圆点：0–1s 缩放进入，1–2s 轻微膨胀，2.4s 变菱形

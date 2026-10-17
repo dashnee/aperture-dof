@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1080">
+<title>Haiku 5.5 — 动效仿制</title>
+<style>
+  :root{
+    --bg:#111010; --ink:#f2efe9; --mute:#8a847b; --acc:#f0553a;
+    --mono:"WenQuanYi Zen Hei Mono","DejaVu Sans Mono",monospace;
+    --sans:"WenQuanYi Zen Hei","Noto Sans CJK SC",sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:#000;height:100%}
+  #stage{position:relative;width:1080px;height:1920px;background:var(--bg);overflow:hidden;font-family:var(--sans);color:var(--ink);transform-origin:0 0}
+  .glow{position:absolute;inset:0;background:radial-gradient(600px 700px at 50% 45%,rgba(240,85,58,.22),transparent 70%);opacity:.8}
+  .progress{position:absolute;top:0;left:0;height:6px;background:var(--acc);width:0}
+  .spec{position:absolute;bottom:60px;left:60px;width:360px;padding:18px 20px;border:1px solid #2a2622;background:rgba(20,18,17,.7);font:600 20px/1.6 var(--mono);opacity:0;z-index:5}
+  .spec b{color:var(--acc);font-weight:600}
+  .scene{position:absolute;inset:0;opacity:0;pointer-events:none}
+  .lbl{position:absolute;font:500 22px var(--mono);letter-spacing:.2em;color:var(--mute)}
+  .abs{position:absolute}
+  .dot{position:absolute;left:50%;top:600px;width:150px;height:150px;margin:-75px 0 0 -75px;border-radius:50%;background:var(--acc)}
+  .diamond{position:absolute;left:50%;top:600px;width:150px;height:150px;margin:-75px 0 0 -75px;background:var(--acc);transform:rotate(45deg) scale(0)}
+  .hello{position:absolute;left:0;right:0;top:820px;text-align:center;font-size:64px;font-weight:300;letter-spacing:.1em}
+  .big{position:absolute;left:0;right:0;text-align:center;font-weight:900;font-size:200px;line-height:1;letter-spacing:-.02em}
+  .sec-title{position:absolute;left:90px;top:200px;font-size:110px;font-weight:300;line-height:1.15}
+  .sec-title .hl{color:var(--acc);font-weight:900;display:block}
+  .rule{position:absolute;left:90px;height:4px;background:var(--acc);width:0}
+  .item{position:absolute;left:90px;right:90px;font-size:64px;font-weight:700;display:flex;justify-content:space-between;align-items:center;height:110px;border-bottom:2px solid #2d2a27}
+  .item .n{font:500 22px var(--mono);color:var(--acc);margin-right:20px;align-self:flex-start;margin-top:12px}
+  .item .en{font:500 20px var(--mono);letter-spacing:.2em;color:var(--mute)}
+  .bar{position:absolute;bottom:0;width:36px;background:var(--ink);transform:scaleY(0);transform-origin:bottom}
+  .bar.acc{background:var(--acc)}
+  .vline{position:absolute;left:90px;top:300px;width:2px;background:#3a3531}
+  .node{position:absolute;left:84px;width:14px;height:14px;border-radius:50%;background:#333;border:2px solid #555}
+  .step{position:absolute;left:150px;font-size:60px;font-weight:700}
+  .big-close{position:absolute;left:90px;top:1290px;font-size:130px;font-weight:900;line-height:1.1}
+  .big-close .hl{color:var(--acc)}
+  .sub{position:absolute;left:90px;top:1520px;font-size:44px;color:var(--mute)}
+  .ring{position:absolute;left:50%;top:1420px;width:160px;height:160px;margin:-80px 0 0 -80px;border:6px solid var(--acc);border-radius:50%;transform:scale(0)}
+  .wm{position:absolute;left:0;right:0;bottom:-40px;text-align:center;font:900 280px var(--sans);color:#1d1b19;letter-spacing:.02em;opacity:0}
+  .logo{position:absolute;left:0;right:0;top:1440px;text-align:center}
+  .badge{display:inline-flex;align-items:center;justify-content:center;width:150px;height:150px;border:6px solid var(--acc);border-radius:50%;color:var(--acc);font:900 64px var(--sans)}
+  .brand{margin-top:20px;font-size:54px;font-weight:700}
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="glow"></div>
+  <div class="progress" id="prog"></div>
+  <div class="spec" id="spec">
+    <div>模型 <b>Claude Haiku 5.5</b></div>
+    <div>推理强度 <b>xhigh</b></div>
+    <div>分辨率 <b>1080 × 1920</b></div>
+    <div>码率 <b>3.79 Mbps</b></div>
+    <div>本次消耗 Tokens <b>260,628</b></div>
+  </div>
+
+  <!-- S1  0–5s : 圆点 → 菱形 → Haiku 3.7 → 5.5 -->
+  <div class="scene" id="s1">
+    <div class="dot" id="dot"></div>
+    <div class="diamond" id="dia"></div>
+    <div class="hello" id="hello">你好，我是</div>
+    <div class="big" id="bigHaiku" style="top:1040px;opacity:0">Haiku</div>
+    <div class="big" id="ver37" style="top:1240px;color:var(--acc);font-size:160px;opacity:0">3.7</div>
+    <div class="big" id="ver55" style="top:1240px;color:var(--acc);font-size:160px;opacity:0">5.5</div>
+  </div>
+
+  <!-- S2  5–14s : 我是一名 动态设计师 -->
+  <div class="scene" id="s2">
+    <div class="lbl" style="left:90px;top:200px">CLAUDE · HAIKU 5.5</div>
+    <div class="sec-title" style="top:280px">我是一名<span class="hl" id="role">动态设计师</span></div>
+    <div class="rule" id="rule2" style="top:610px"></div>
+    <div class="abs" id="sub2" style="left:90px;top:660px;font-size:44px;color:var(--mute);opacity:0">用运动，讲清楚每一件事。</div>
+    <div class="abs" id="wmA" style="left:0;top:1560px;font:900 380px var(--sans);color:#1b1917;opacity:0">动效</div>
+  </div>
+
+  <!-- S3  14–20s : 精选作品 列表 + 演示 -->
+  <div class="scene" id="s3">
+    <div class="lbl" style="left:90px;top:120px">02 · 精选作品</div>
+    <div class="item" id="w1" style="top:200px"><span><span class="n">01</span>弹性排版<br><span class="en">SPRING · STAGGER</span></span><span style="font-size:70px" id="demo1">动效</span></div>
+    <div class="item" id="w2" style="top:360px"><span><span class="n">02</span>形变动画<br><span class="en">SHAPE MORPH</span></span><span id="demo2" style="width:90px;height:90px;background:var(--acc);border-radius:0"></span></div>
+    <div class="item" id="w3" style="top:520px"><span><span class="n">03</span>数据动效<br><span class="en">BARS · STAGGER</span></span><span id="demo3" style="position:relative;width:260px;height:100px"></span></div>
+    <div class="item" id="w4" style="top:680px"><span><span class="n">04</span>路径绘制<br><span class="en">STROKE · OFFSET-PATH</span></span><span id="demo4" style="width:260px;height:100px"></span></div>
+  </div>
+
+  <!-- S4  20–25s : 设计原则 -->
+  <div class="scene" id="s4">
+    <div class="lbl" style="left:90px;top:120px">03 · 设计原则</div>
+    <div class="sec-title" id="p1" style="top:220px;font-size:140px;opacity:0">节奏</div>
+    <div class="abs" id="p1s" style="left:90px;top:380px;font:500 22px var(--mono);color:var(--acc);opacity:0">0.3 — 0.6 秒</div>
+    <div class="sec-title" id="p2" style="top:500px;font-size:140px;opacity:0">缓动</div>
+    <div class="abs" id="p2s" style="left:90px;top:660px;font:500 22px var(--mono);color:var(--acc);opacity:0">POWER · BACK · EXPO</div>
+    <div class="sec-title" id="p3" style="top:780px;font-size:140px;opacity:0">层级</div>
+    <div class="abs" id="p3s" style="left:90px;top:940px;font:500 22px var(--mono);color:var(--acc);opacity:0">先出现的最重要</div>
+    <div class="sec-title" id="p4" style="top:1060px;font-size:140px;opacity:0">留白</div>
+    <div class="abs" id="p4s" style="left:90px;top:1220px;font:500 22px var(--mono);color:var(--acc);opacity:0">空白也是设计</div>
+  </div>
+
+  <!-- S5  25–30s : 核心能力 / 工作流 / 结尾 -->
+  <div class="scene" id="s5">
+    <div class="lbl" style="left:90px;top:120px">04 · 核心能力</div>
+    <div class="item" id="c1" style="top:200px"><span class="n">01</span>动态排版</div>
+    <div class="item" id="c2" style="top:320px"><span class="n">02</span>动效系统</div>
+    <div class="item" id="c3" style="top:440px"><span class="n">03</span>数据动效</div>
+    <div class="item" id="c4" style="top:560px"><span class="n">04</span>分镜到成片</div>
+    <div class="item" id="c5" style="top:680px"><span class="n">05</span>可复现的确定性渲染</div>
+
+    <div id="s5a">
+      <div class="lbl" style="left:90px;top:880px">05 · 工作流程</div>
+      <div class="vline" id="flowLine" style="top:940px;height:0;background:var(--acc)"></div>
+      <div class="step" id="f1" style="top:930px;opacity:0">理解需求</div>
+      <div class="step" id="f2" style="top:1010px;opacity:0">分镜规划</div>
+      <div class="step" id="f3" style="top:1090px;opacity:0">动效实现</div>
+      <div class="step" id="f4" style="top:1170px;opacity:0">校验审查</div>
+      <div class="step" id="f5" style="top:1250px;opacity:0">确定渲染</div>
+    </div>
+
+    <div id="s5b" style="opacity:0">
+      <div class="big-close" style="top:560px">每一帧，<br><span class="hl">都有意图。</span></div>
+      <div class="sub" style="top:900px">期待你的下一个项目。</div>
+      <div class="ring" id="ring" style="top:1120px"></div>
+      <div class="logo" id="logo" style="top:1360px;opacity:0"><div class="badge">5.5</div><div class="brand">Haiku</div></div>
+      <div class="wm" id="wm2">HAIKU</div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ---------- 时间线（秒） ---------- */
+const DURATION = 30;
+const $ = id => document.getElementById(id);
+
+// 轻量缓动
+const ease = {
+  out:  t => 1 - Math.pow(1 - t, 3),
+  back: t => { const c=1.70158; return 1 + (c+1)*Math.pow(t-1,3) + c*Math.pow(t-1,2); },
+  io:   t => t<.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2,3)/2
+};
+// 区间插值：t 在 [a,b] 内从 0→1
+const seg = (t,a,b,fn=ease.out) => t<=a?0:t>=b?1:fn((t-a)/(b-a));
+const lerp=(a,b,k)=>a+(b-a)*k;
+
+function setScene(id, t, a, b){
+  const el=$(id); const local=t-a;
+  el.style.opacity = (t>=a && t<b) ? 1 : 0;
+}
+
+function frame(t){
+  // 进度条
+  $("prog").style.width = (t/DURATION*100)+"%";
+  // 场景显隐（相邻场景做一次淡入淡出）
+  const scenes=[["s1",0,5],["s2",5,14],["s3",14,20],["s4",20,25],["s5",25,30]];
+  scenes.forEach(([id,a,b])=>{
+    const el=$(id);
+    const fi = seg(t,a,a+0.3,ease.io), fo = 1-seg(t,b-0.3,b,ease.io);
+    el.style.opacity = (t<a||t>=b)?0:Math.min(fi,fo);
+  });
+  // 规格面板：S1 之后出现，S2 之后可见
+  $("spec").style.opacity = seg(t,0.8,1.6);
+
+  /* ---- S1 ---- */
+  // 圆点：0–1s 缩放进入，1–2s 轻微膨胀，2.4s 变菱形
+  const dotS = seg(t,0,0.8,ease.back);
+  $("dot").style.transform = `scale(${dotS})`;
+  $("dot").style.opacity = 1 - seg(t,2.3,2.7);
+  // 菱形：2.4–3.0s 旋转出现
+  const dia = seg(t,2.4,3.0,ease.back);
+  $("dia").style.transform = `rotate(45deg) scale(${dia})`;
+  $("dia").style.opacity = 1 - seg(t,4.6,5.0);
+  $("hello").style.opacity = seg(t,1.2,1.8) * (1 - seg(t,4.6,5.0));
+  $("hello").style.transform = `translateY(${lerp(20,0,seg(t,1.2,1.8))}px)`;
+  $("bigHaiku").style.opacity = seg(t,2.8,3.4);
+  $("bigHaiku").style.transform = `translateY(${lerp(30,0,seg(t,2.8,3.4))}px)`;
+  $("ver37").style.opacity = seg(t,3.6,4.0) * (1-seg(t,4.2,4.6));
+  $("ver55").style.opacity = seg(t,4.2,4.6);
+
+  /* ---- S2 ---- */
+  $("rule2").style.width = (seg(t,7.2,8.2,ease.io)*720)+"px";
+  $("sub2").style.opacity = seg(t,8.4,9.0);
+  // 0.6 "动效"水印缓慢上移
+  $("wmA").style.transform = `translateY(${lerp(40,-30,seg(t,5,14,ease.io))}px)`;
+  $("wmA").style.opacity = seg(t,5.5,6.5) * 0.9;
+
+  /* ---- S3 列表逐项 ---- */
+  const items=[["w1",14.4],["w2",15.4],["w3",16.4],["w4",17.4]];
+  items.forEach(([id,s])=>{
+    const k=seg(t,s,s+0.6,ease.out);
+    $(id).style.opacity=k;
+    $(id).style.transform=`translateX(${lerp(-40,0,k)}px)`;
+  });
+  // 演示：弹性文字
+  const dm=seg(t,15.2,15.8,ease.back);
+  $("demo1").style.transform = `scale(${dm})`;
+  // 形变（方块 → 圆）
+  const r=seg(t,16.8,17.4,ease.io);
+  $("demo2").style.borderRadius = (r*50)+"%";
+  // 数据柱（4 根，依次生长）
+  const demo3=$("demo3"); if(demo3.childElementCount===0){
+    [60,110,80,150,120].forEach((h,i)=>{const b=document.createElement("div");b.className="bar"+(i===3?" acc":"");b.style.left=(i*56)+"px";b.style.height=h+"px";b.style.width="36px";b.style.position="absolute";b.style.bottom="0";demo3.appendChild(b);});
+  }
+  [...demo3.children].forEach((b,i)=>{
+    const k=seg(t,17.2+i*0.12,17.2+i*0.12+0.45,ease.back);
+    b.style.transform=`scaleY(${k})`;
+  });
+  // 路径：stroke 绘制（SVG 作为 demo4）
+  if(!$("demo4").firstChild){
+    $("demo4").innerHTML='<svg width="260" height="100" viewBox="0 0 260 100"><path id="pth" d="M4 90 C60 90 80 30 130 50 S200 20 256 8" fill="none" stroke="#f2efe9" stroke-width="3" stroke-linecap="round"/><circle id="pdot" r="6" fill="#f0553a"/></svg>';
+  }
+  const pth=$("pth"); if(pth){
+    const L=pth.getTotalLength(); const k=seg(t,18.2,19.4,ease.io);
+    pth.style.strokeDasharray=L; pth.style.strokeDashoffset=L*(1-k);
+    const p=pth.getPointAtLength(L*k); const d=$("pdot");
+    d.setAttribute("cx",p.x); d.setAttribute("cy",p.y); d.style.opacity = k>0?1:0;
+  }
+
+  /* ---- S4 原则逐条 ---- */
+  [["p1",20.4],["p2",21.2],["p3",22.0],["p4",22.8]].forEach(([id,s])=>{
+    const k=seg(t,s,s+0.5,ease.out);
+    $(id).style.opacity=k; $(id).style.transform=`translateY(${lerp(30,0,k)}px)`;
+    const sub=$(id+"s"); if(sub) sub.style.opacity=seg(t,s+0.4,s+0.9);
+  });
+
+  /* ---- S5 ---- */
+  [["c1",25.2],["c2",25.5],["c3",25.8],["c4",26.1],["c5",26.4]].forEach(([id,s])=>{
+    const k=seg(t,s,s+0.4,ease.out)*(1-seg(t,26.7,27.1));
+    $(id).style.opacity=k; $(id).style.transform=`translateX(${lerp(-30,0,k)}px)`;
+  });
+  // 工作流时间线：竖线生长 + 节点
+  $("flowLine").style.height = (seg(t,26.6,27.6,ease.io)*400)+"px";
+  ["f1","f2","f3","f4","f5"].forEach((id,i)=>{
+    const s=26.8+i*0.2; const k=seg(t,s,s+0.4,ease.out);
+    $(id).style.opacity=k; $(id).style.transform=`translateX(${lerp(20,0,k)}px)`;
+  });
+  // 工作流结束后，切到收尾屏（原片 27s 起）
+  const endIn = seg(t,26.9,27.5);
+  $("s5a").style.opacity = 1 - endIn;
+  $("s5b").style.opacity = endIn;
+  const rk=seg(t,27.8,28.6,ease.back);
+  $("ring").style.transform=`scale(${rk})`;
+  $("wm2").style.opacity=seg(t,28.6,29.2)*0.9;
+  $("logo").style.opacity=seg(t,28.8,29.4);
+}
+
+/* ---------- 播放控制 ---------- */
+let startT=null, playing=false;
+function loop(now){
+  if(!playing) return;
+  if(startT===null) startT=now;
+  const t = ((now-startT)/1000) % DURATION;
+  frame(t);
+  requestAnimationFrame(loop);
+}
+function play(){ startT=null; playing=true; requestAnimationFrame(loop); }
+function seek(t){ playing=false; frame(t); }
+
+// 页面 URL 参数：?t=秒 用于截帧；否则自动播放
+const q=new URLSearchParams(location.search);
+if(q.has("t")) seek(parseFloat(q.get("t")));
+else play();
+window.__seek = seek;
+</script>
+</body>
+</html>
